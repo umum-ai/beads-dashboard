@@ -2,6 +2,7 @@
 import { computed, signal } from "@preact/signals";
 import type { BoardIssue, DatabaseInfo } from "../lib/bff-types.ts";
 import { type BoardState, emptyBoardState } from "../lib/delta.ts";
+import { buildIndex, type HierarchyIndex } from "../lib/hierarchy.ts";
 
 export const board = signal<BoardState>(emptyBoardState());
 export const boardLoading = signal(false);
@@ -65,3 +66,6 @@ export function childrenOf(id: string): BoardIssue[] {
   for (const row of allIssues.value) if (row.parent === id) out.push(row);
   return out;
 }
+
+/** Parent/children index over `allIssues` (lib/hierarchy.ts), rebuilt when the rows change. */
+export const hierarchy = computed<HierarchyIndex>(() => buildIndex(allIssues.value));

@@ -382,6 +382,99 @@ function buildSiam(): FixtureDb {
       ageH: 80,
       type: "spike",
     },
+    // Three-level hierarchy: epic g1a → sub-epics g1a.1 / g1a.2 → tasks, plus one direct task
+    {
+      id: "g1a",
+      title: "Editing: writes, drag-and-drop, dialogs",
+      type: "epic",
+      priority: 1,
+      labels: ["lane:frontend", "iteration:5"],
+      assignee: "fable",
+      ageH: 180,
+      description: "Stage 5: every write the board needs, with guards and dialogs.",
+    },
+    {
+      id: "g1a.1",
+      title: "Drag and drop: status, priority, parent",
+      type: "epic",
+      parent: "g1a",
+      priority: 1,
+      labels: ["lane:frontend"],
+      assignee: "fable",
+      ageH: 170,
+    },
+    {
+      id: "g1a.1.1",
+      title: "Drop targets on priority sections",
+      parent: "g1a.1",
+      status: "closed",
+      priority: 1,
+      labels: ["lane:frontend"],
+      ageH: 160,
+      closedH: 20,
+      type: "feature",
+    },
+    {
+      id: "g1a.1.2",
+      title: "Guarded PATCH after a detail read",
+      parent: "g1a.1",
+      status: "in_progress",
+      priority: 1,
+      labels: ["lane:frontend"],
+      assignee: "fable",
+      ageH: 150,
+      type: "feature",
+    },
+    {
+      id: "g1a.1.3",
+      title: "Drop into the done column opens the close dialog",
+      parent: "g1a.1",
+      status: "open",
+      priority: 2,
+      labels: ["lane:frontend"],
+      ageH: 140,
+      type: "feature",
+    },
+    {
+      id: "g1a.2",
+      title: "Dialogs: close reason, force, conflict",
+      type: "epic",
+      parent: "g1a",
+      priority: 2,
+      labels: ["lane:frontend"],
+      ageH: 130,
+    },
+    {
+      id: "g1a.2.1",
+      title: "Close dialog with optional reason",
+      parent: "g1a.2",
+      status: "open",
+      priority: 2,
+      labels: ["lane:frontend"],
+      ageH: 120,
+      type: "feature",
+    },
+    {
+      id: "g1a.2.2",
+      title: "Conflict dialog on 409 precondition_failed",
+      parent: "g1a.2",
+      status: "open",
+      priority: 2,
+      labels: ["lane:frontend"],
+      ageH: 110,
+      type: "feature",
+    },
+    {
+      id: "g1a.3",
+      title: "Actor setting is sent with every write",
+      parent: "g1a",
+      status: "closed",
+      priority: 3,
+      labels: ["lane:frontend"],
+      ageH: 100,
+      closedH: 5,
+      type: "task",
+    },
     // Loose issues
     {
       id: "d4e",
@@ -573,6 +666,9 @@ function buildSiam(): FixtureDb {
   dep("b2c.5", "b2c.4");
   dep("b2c.5", "b2c.2");
   dep("a1f.4", "a1f.3");
+  dep("g1a.1.2", "g1a.1.1");
+  dep("g1a.1.3", "g1a.1.2");
+  dep("g1a.2", "g1a.1");
   dep("a3b", "a1f", "tracks");
   dep("c5d", "b2c.2", "related");
   recount(issues, dependencies);
@@ -729,6 +825,68 @@ export function computeReady(db: FixtureDb): string[] {
     if (!blocked) out.push(r.id);
   }
   return out;
+}
+
+/**
+ * Direct-children counters per parent over the rows the snapshot would carry (same semantics
+ * as the server: `child_count` = children in scope, `child_closed_count` = those in a done
+ * status). `inScope` is the mock BFF's scope test.
+ */
+export function childCounts(
+  db: FixtureDb,
+  inScope: (r: FixtureIssue) => boolean,
+): Map<string, { total: number; closed: number }> {
+  const done = new Set(db.statuses.filter((s) => s.category === "done").map((s) => s.name));
+  const out = new Map<string, { total: number; closed: number }>();
+  for (const r of db.issues.values()) {
+    if (!r.parent || !inScope(r)) continue;
+    const entry = out.get(r.parent) ?? { total: 0, closed: 0 };
+    entry.total++;
+    if (done.has(r.status ?? "open")) entry.closed++;
+    out.set(r.parent, entry);
+  }
+  return out;
+}
+
+export interface TreeItem {
+  id: string;
+  depth: number;
+  parent_id: string;
+  edge_from_parent?: string;
+}
+
+/**
+ * `GET dependencies/tree` over the fixture edges: `down` follows edges the node depends on
+ * (issue_id → depends_on_id), `up` the reverse; every type but `relates-to`; DFS pre-order,
+ * each node at most once per walk; `both` = up nodes (without the root) then the down tree.
+ */
+export function walkTree(
+  db: FixtureDb,
+  rootId: string,
+  direction: "down" | "up" | "both",
+  maxDepth: number,
+): TreeItem[] {
+  const walk = (up: boolean): TreeItem[] => {
+    const out: TreeItem[] = [];
+    const seen = new Set<string>();
+    const visit = (id: string, depth: number, parentId: string, edge?: string) => {
+      if (seen.has(id) || !db.issues.has(id)) return;
+      seen.add(id);
+      const item: TreeItem = { id, depth, parent_id: parentId };
+      if (edge) item.edge_from_parent = edge;
+      out.push(item);
+      if (depth >= maxDepth) return;
+      const edges = db.dependencies.filter(
+        (d) => d.type !== "relates-to" && (up ? d.depends_on_id === id : d.issue_id === id),
+      );
+      for (const d of edges) visit(up ? d.issue_id : d.depends_on_id, depth + 1, id, d.type);
+    };
+    visit(rootId, 0, "");
+    return out;
+  };
+  if (direction === "down") return walk(false);
+  if (direction === "up") return walk(true);
+  return [...walk(true).slice(1), ...walk(false)];
 }
 
 /** Full detail document as `GET issues/{id}` would return it. */

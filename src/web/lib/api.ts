@@ -4,7 +4,14 @@
  */
 
 import { withBase } from "./basePath.ts";
-import type { IssueDetails, IssueListResponse, Meta, Problem, Snapshot } from "./bff-types.ts";
+import type {
+  IssueDetails,
+  IssueListResponse,
+  Meta,
+  Problem,
+  Snapshot,
+  TreePage,
+} from "./bff-types.ts";
 
 export class ApiError extends Error {
   readonly problem: Problem;
@@ -93,6 +100,11 @@ export const api = {
     }
     return apiFetch<IssueListResponse>(`/api/p/${db(database)}/issues?${search.toString()}`);
   },
+  /** `GET dependencies/tree` proxy: flat DFS pre-order `TreeNode`s (docs/bff-api.md). */
+  tree: (database: string, rootId: string, direction: "down" | "up" | "both", maxDepth: number) =>
+    apiFetch<TreePage>(
+      `/api/p/${db(database)}/dependencies/tree?root_id=${encodeURIComponent(rootId)}&direction=${direction}&max_depth=${maxDepth}`,
+    ),
   eventsUrl: (database: string) => withBase(`/api/p/${db(database)}/events`),
 };
 

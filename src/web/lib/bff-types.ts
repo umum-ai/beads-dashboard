@@ -4,7 +4,14 @@
  */
 import type { IssueWithCounts, Stats } from "../../api-client/types.ts";
 
-export type { Comment, IssueDetails, IssueListResponse, Problem } from "../../api-client/types.ts";
+export type {
+  Comment,
+  IssueDetails,
+  IssueListResponse,
+  Problem,
+  TreeNode,
+  TreePage,
+} from "../../api-client/types.ts";
 export type { IssueWithCounts, Stats };
 
 export type DatabaseState = "starting" | "ready" | "degraded" | "down";
@@ -39,13 +46,16 @@ export interface StatusDef {
 }
 
 /**
- * `IssueWithCounts` row from `GET issues?brief=true` plus the BFF-derived `blocked`. The epic
- * progress counters exist only on `IssueDetails` in the spec; they are optional here so a BFF
- * that decorates epic rows with them is honoured, and the board derives them from the
- * snapshot's `parent` links otherwise.
+ * `IssueWithCounts` row from `GET issues?brief=true` plus the BFF-derived `blocked` and, on rows
+ * with children inside the snapshot, the direct-children counters `child_count` /
+ * `child_closed_count` (docs/bff-api.md). The spec's `epic_*` counters exist only on
+ * `IssueDetails`; they stay optional here so a BFF that decorates rows with them is honoured,
+ * and the board falls back to the snapshot's `parent` links when neither pair is present.
  */
 export type BoardIssue = IssueWithCounts & {
   blocked: boolean;
+  child_count?: number;
+  child_closed_count?: number;
   epic_total_children?: number;
   epic_closed_children?: number;
 };

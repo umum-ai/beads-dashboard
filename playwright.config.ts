@@ -22,7 +22,20 @@ export default defineConfig({
     locale: "en-US",
     colorScheme: "light",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      testIgnore: /live\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // real-only live test; runs after the board tests so its new card cannot skew their counts
+      name: "live",
+      testMatch: /live\.spec\.ts/,
+      dependencies: ["chromium"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
   webServer:
     target === "mock"
       ? {

@@ -14,6 +14,8 @@ export interface ToolbarProps {
   assignees: string[];
   shown: number;
   total: number;
+  /** View-specific controls rendered before the count (the board puts its lane toggle here). */
+  extra?: JSX.Element | null | undefined;
 }
 
 function TypeFilter({ types }: { types: string[] }): JSX.Element {
@@ -132,11 +134,12 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           type="button"
           class="btn btn--ghost"
           data-testid="filters-clear"
-          onClick={() => setFilters(EMPTY_FILTERS)}
+          onClick={() => setFilters({ ...EMPTY_FILTERS, epic: f.epic })}
         >
           {t("filters.clear")}
         </button>
       ) : null}
+      {props.extra ?? null}
       <span class="toolbar__count" data-testid="filter-count">
         {active ? t("filters.matching", { shown: props.shown, total: props.total }) : props.total}
       </span>

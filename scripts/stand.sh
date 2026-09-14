@@ -6,6 +6,7 @@
 #   scripts/stand.sh up     [--dir DIR] [--dolt-port P] [--bd-port P] [--prefix kb] [--database NAME]
 #   scripts/stand.sh down   [--dir DIR] [--purge]
 #   scripts/stand.sh seed   [--dir DIR]
+#   scripts/stand.sh create-issue TITLE [--dir DIR] [--type T] [--priority N]   # prints the new id
 #   scripts/stand.sh status [--dir DIR]
 #   scripts/stand.sh --help
 #
@@ -31,9 +32,12 @@ PREFIX="${STAND_PREFIX:-kb}"
 DATABASE="${STAND_DATABASE:-}"
 PURGE=0
 CMD=""
+TITLE=""
+ISSUE_TYPE="task"
+PRIORITY="2"
 
 usage() {
-  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 log() { printf 'stand: %s\n' "$*" >&2; }
@@ -43,6 +47,7 @@ die() { log "error: $*"; exit 1; }
 [[ $# -gt 0 ]] || { usage; exit 2; }
 case "$1" in
   up|down|seed|status) CMD="$1"; shift ;;
+  create-issue) CMD="$1"; shift; [[ $# -gt 0 && "$1" != -* ]] && { TITLE="$1"; shift; } ;;
   -h|--help|help) usage; exit 0 ;;
   *) die "unknown command '$1' (see --help)" ;;
 esac
@@ -54,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     --prefix) PREFIX="$2"; shift 2 ;;
     --database) DATABASE="$2"; shift 2 ;;
     --purge) PURGE=1; shift ;;
+    --type) ISSUE_TYPE="$2"; shift 2 ;;
+    --priority) PRIORITY="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option '$1' (see --help)" ;;
   esac
@@ -248,9 +255,18 @@ SEED_CLOSED=$t2
 IDS
 }
 
+# One issue through the CLI in the stand workspace (the e2e live test uses it while the board is
+# open: the mutation reaches bd serve's event journal and must show up on the board without reload).
+cmd_create_issue() {
+  [[ -f "$WS_DIR/.beads/metadata.json" ]] || die "workspace not initialised; run 'up' first"
+  [[ -n "$TITLE" ]] || die "create-issue needs a TITLE"
+  "$BD" -C "$WS_DIR" --actor stand-cli q --type "$ISSUE_TYPE" --priority "$PRIORITY" "$TITLE"
+}
+
 case "$CMD" in
   up) cmd_up ;;
   down) cmd_down ;;
   seed) cmd_seed ;;
   status) cmd_status ;;
+  create-issue) cmd_create_issue ;;
 esac

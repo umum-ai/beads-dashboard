@@ -7,9 +7,18 @@ export interface Filters {
   label: string;
   assignee: string;
   priorities: number[];
+  /** Drill-down: show only the descendants of this epic (`?epic=<id>`); not a quick filter. */
+  epic: string;
 }
 
-export const EMPTY_FILTERS: Filters = { q: "", types: [], label: "", assignee: "", priorities: [] };
+export const EMPTY_FILTERS: Filters = {
+  q: "",
+  types: [],
+  label: "",
+  assignee: "",
+  priorities: [],
+  epic: "",
+};
 
 export function parseFilters(search: string): Filters {
   const params = new URLSearchParams(search);
@@ -24,6 +33,7 @@ export function parseFilters(search: string): Filters {
     label: params.get("label") ?? "",
     assignee: params.get("assignee") ?? "",
     priorities: [...new Set(priorities)].sort(),
+    epic: params.get("epic") ?? "",
   };
 }
 
@@ -34,10 +44,12 @@ export function serializeFilters(f: Filters): string {
   if (f.label) params.set("label", f.label);
   if (f.assignee) params.set("assignee", f.assignee);
   if (f.priorities.length) params.set("priority", f.priorities.join(","));
+  if (f.epic) params.set("epic", f.epic);
   const s = params.toString();
   return s ? `?${s}` : "";
 }
 
+/** Quick filters only: the drill-down `epic` is not a filter the toolbar clears. */
 export function isFilterEmpty(f: Filters): boolean {
   return !f.q && !f.types.length && !f.label && !f.assignee && !f.priorities.length;
 }

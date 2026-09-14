@@ -19,6 +19,7 @@ import { describeError } from "../state/toasts.ts";
 import { copyId, typeLabel } from "./Card.tsx";
 import { statusLabel } from "./Column.tsx";
 import { EmptyState } from "./EmptyState.tsx";
+import { HierarchySection } from "./TreeView.tsx";
 
 interface RelatedRow {
   id: string;
@@ -139,6 +140,10 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
   const lang = locale.value;
   const d = details;
   const children = childrenOf(id).sort(compareCards);
+  // bd lists `parent-child` edges among dependencies/dependents; the drawer shows those through
+  // the Parent field and the Children section, so the blocking lists keep the other kinds only.
+  const dependsOn = (d?.dependencies ?? []).filter((x) => x.dependency_type !== "parent-child");
+  const blocks = (d?.dependents ?? []).filter((x) => x.dependency_type !== "parent-child");
   const priority = d ? clampPriority(d.priority) : null;
   const notFound = error instanceof ApiError && error.status === 404;
   const blocked = board.value.issues.get(id)?.blocked || d?.is_blocked === true;
@@ -169,7 +174,15 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
             {d ? <span aria-hidden="true">{typeGlyph(d.issue_type)}</span> : null}
             {id}
           </button>
-          {blocked ? <span class="chip chip--blocked">{t("detail.blocked")}</span> : null}
+          {blocked ? (
+            <span
+              class="chip chip--blocked"
+              title={t("card.blocked.help")}
+              data-testid="detail-blocked"
+            >
+              {t("detail.blocked")}
+            </span>
+          ) : null}
           <span class="header__spacer" />
           <button
             type="button"
@@ -299,37 +312,30 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
               />
               <MarkdownSection title={t("detail.section.notes")} source={d.notes} />
 
-              {children.length ? (
-                <section class="drawer__section">
-                  <h3 class="drawer__h">
-                    {t("detail.section.children", { count: children.length })}
-                  </h3>
-                  <RelatedList db={db} rows={children} testId="detail-children" />
-                </section>
-              ) : null}
+              <HierarchySection db={db} id={id} row={board.value.issues.get(id)} title={d.title} />
 
-              {d.dependencies?.length ? (
+              {dependsOn.length ? (
                 <section class="drawer__section">
                   <h3 class="drawer__h">
-                    {t("detail.section.dependencies", { count: d.dependencies.length })}
+                    {t("detail.section.dependencies", { count: dependsOn.length })}
                   </h3>
                   <RelatedList
                     db={db}
                     testId="detail-dependencies"
-                    rows={d.dependencies.map((x) => ({ ...x, kind: x.dependency_type }))}
+                    rows={dependsOn.map((x) => ({ ...x, kind: x.dependency_type }))}
                   />
                 </section>
               ) : null}
 
-              {d.dependents?.length ? (
+              {blocks.length ? (
                 <section class="drawer__section">
                   <h3 class="drawer__h">
-                    {t("detail.section.dependents", { count: d.dependents.length })}
+                    {t("detail.section.dependents", { count: blocks.length })}
                   </h3>
                   <RelatedList
                     db={db}
                     testId="detail-dependents"
-                    rows={d.dependents.map((x) => ({ ...x, kind: x.dependency_type }))}
+                    rows={blocks.map((x) => ({ ...x, kind: x.dependency_type }))}
                   />
                 </section>
               ) : null}

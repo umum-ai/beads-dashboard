@@ -27,10 +27,10 @@ if (typeof window !== "undefined") window.addEventListener("popstate", sync);
 
 export function navigate(
   next: Route,
-  opts: { replace?: boolean; keepFilters?: boolean } = {},
+  opts: { replace?: boolean; keepFilters?: boolean; filters?: Filters } = {},
 ): void {
   const keep = opts.keepFilters ?? true;
-  const search = keep ? serializeFilters(filters.value) : "";
+  const search = serializeFilters(opts.filters ?? (keep ? filters.value : EMPTY_FILTERS));
   const url = withBase(routePath(next)) + search;
   if (opts.replace) history.replaceState(null, "", url);
   else history.pushState(null, "", url);
@@ -49,6 +49,11 @@ export function updateFilters(patch: Partial<Filters>): void {
 
 export function hrefFor(next: Route, keepFilters = true): string {
   return withBase(routePath(next)) + (keepFilters ? serializeFilters(filters.value) : "");
+}
+
+/** Href for `next` with an explicit filter set (e.g. the board drilled into an epic). */
+export function hrefWith(next: Route, withFilters: Filters): string {
+  return withBase(routePath(next)) + serializeFilters(withFilters);
 }
 
 /** Intercept plain left clicks on internal links so the SPA handles them. */

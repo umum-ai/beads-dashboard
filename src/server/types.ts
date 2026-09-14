@@ -35,8 +35,17 @@ export interface Meta {
   databases: DatabaseInfo[];
 }
 
-/** `IssueWithCounts` row from a brief listing plus the BFF-derived `blocked` flag. */
-export type BoardIssue = IssueWithCounts & { blocked: boolean };
+/**
+ * `IssueWithCounts` row from a brief listing plus the BFF-derived fields: `blocked`, and for
+ * rows that have children inside the snapshot scope, the direct-children counters
+ * `child_count` / `child_closed_count` (closed = done-category status). Absent when the row has
+ * no children in the snapshot.
+ */
+export type BoardIssue = IssueWithCounts & {
+  blocked: boolean;
+  child_count?: number;
+  child_closed_count?: number;
+};
 
 export interface Snapshot {
   seq: number;

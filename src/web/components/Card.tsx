@@ -34,8 +34,8 @@ export function Card({ db, issue, done }: CardProps): JSX.Element {
   const type = issue.issue_type ?? "task";
   const target = { kind: "issue" as const, db, issueId: issue.id };
   const derived = childStats.value.get(issue.id);
-  const total = issue.epic_total_children ?? derived?.total ?? 0;
-  const closed = issue.epic_closed_children ?? derived?.closed ?? 0;
+  const total = issue.child_count ?? issue.epic_total_children ?? derived?.total ?? 0;
+  const closed = issue.child_closed_count ?? issue.epic_closed_children ?? derived?.closed ?? 0;
   const showProgress = total > 0 || type === "epic";
   const labels = issue.labels ?? [];
 
@@ -74,7 +74,11 @@ export function Card({ db, issue, done }: CardProps): JSX.Element {
           {issue.id}
         </button>
         <span class="card__spacer" />
-        {issue.blocked ? <span class="chip chip--blocked">{t("card.blocked")}</span> : null}
+        {issue.blocked ? (
+          <span class="chip chip--blocked" title={t("card.blocked.help")}>
+            {t("card.blocked")}
+          </span>
+        ) : null}
         <span class="pchip" title={t(`priority.name.${priority}`)}>
           {t(`priority.${priority}`)}
         </span>

@@ -4,21 +4,27 @@
  * anything else and the database named by `E2E_DB` holds at least one open issue.
  */
 import { expect, test } from "@playwright/test";
-
-const DB = process.env.E2E_DB ?? "siam_platform";
-const MOCK = (process.env.E2E_TARGET ?? "mock") === "mock";
+import { DB, MOCK, snapshot } from "./helpers.ts";
 
 test.beforeEach(async ({ page }) => {
   await page.goto(`/p/${DB}/board`);
   await expect(page.getByTestId("board")).toBeVisible();
 });
 
-test("board opens with status columns and at least one card", async ({ page }) => {
+test("board opens with status columns and at least one card", async ({ page, request }) => {
   const columns = page.getByTestId("column");
   await expect(columns.first()).toBeVisible();
   expect(await columns.count()).toBeGreaterThanOrEqual(2);
   await expect(page.getByTestId("column").filter({ hasText: "Open" })).toBeVisible();
   await expect(page.getByTestId("card").first()).toBeVisible();
+  // every open issue the BFF reports is on the board (seeded data in real mode, fixture in mock)
+  const open = (await snapshot(request)).issues.filter((i) => i.status === "open");
+  expect(open.length).toBeGreaterThan(0);
+  for (const issue of open) {
+    const card = page.locator(`[data-testid="card"][data-id="${issue.id}"]`);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("card-title")).toHaveText(issue.title);
+  }
   if (MOCK) {
     // custom status from config lands between the built-ins; closed column has the window hint
     await expect(page.locator('[data-testid="column"][data-status="review"]')).toBeVisible();
@@ -118,14 +124,16 @@ test("text filter hides non-matching cards and lives in the URL", async ({ page 
 });
 
 test("priority filter keeps only cards of that priority", async ({ page }) => {
-  await page.getByTestId("filter-priority-0").click();
-  await expect(page).toHaveURL(/[?&]priority=0/);
+  // the mock fixture has P0 issues; real data may not, so take the priority of the first card
   const cards = page.getByTestId("card");
+  const wanted = MOCK ? "0" : ((await cards.first().getAttribute("data-priority")) ?? "2");
+  await page.getByTestId(`filter-priority-${wanted}`).click();
+  await expect(page).toHaveURL(new RegExp(`[?&]priority=${wanted}`));
   await expect.poll(() => cards.count()).toBeGreaterThan(0);
   for (const p of await cards.evaluateAll((els) =>
     els.map((e) => e.getAttribute("data-priority")),
   )) {
-    expect(p).toBe("0");
+    expect(p).toBe(wanted);
   }
 });
 

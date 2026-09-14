@@ -228,6 +228,83 @@ export function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boole
 }
 
 // ---------------------------------------------------------------------------------------------
+// Child counters (hierarchy)
+// ---------------------------------------------------------------------------------------------
+
+export interface ChildCounts {
+  total: number;
+  closed: number;
+}
+
+/**
+ * Direct-children counters over the rows of the snapshot: `total` = rows whose `parent` is the
+ * id, `closed` = those in a done-category status. Children outside the snapshot scope (closed
+ * before the window) are not counted; `IssueDetails.epic_*` stays the exact figure.
+ */
+export function countChildren(
+  issues: ReadonlyMap<string, BoardIssue>,
+  statuses: readonly StatusDef[],
+  onlyFor?: ReadonlySet<string>,
+): Map<string, ChildCounts> {
+  const out = new Map<string, ChildCounts>();
+  for (const row of issues.values()) {
+    if (!row.parent || (onlyFor && !onlyFor.has(row.parent))) continue;
+    const entry = out.get(row.parent) ?? { total: 0, closed: 0 };
+    entry.total++;
+    if (statusCategory(statuses, row.status) === "done") entry.closed++;
+    out.set(row.parent, entry);
+  }
+  return out;
+}
+
+/** The row with `child_count` / `child_closed_count` set from `counts`, or removed when absent. */
+export function withChildCounts(row: BoardIssue, counts: ChildCounts | undefined): BoardIssue {
+  const next: BoardIssue = { ...row };
+  if (counts && counts.total > 0) {
+    next.child_count = counts.total;
+    next.child_closed_count = counts.closed;
+  } else {
+    delete next.child_count;
+    delete next.child_closed_count;
+  }
+  return next;
+}
+
+/** Stamp the counters on every row of `issues` in place (baseline). */
+export function stampChildCounts(
+  issues: Map<string, BoardIssue>,
+  statuses: readonly StatusDef[],
+): void {
+  const counts = countChildren(issues, statuses);
+  for (const [id, row] of issues) {
+    const c = counts.get(id);
+    if (c || row.child_count !== undefined) issues.set(id, withChildCounts(row, c));
+  }
+}
+
+/**
+ * Recompute the counters of the rows named in `ids` (ids absent from the state are ignored),
+ * store the rows that changed and return them so the caller adds them to a delta's upserts.
+ */
+export function reconcileChildCounts(state: StateData, ids: Iterable<string>): BoardIssue[] {
+  const wanted = new Set<string>();
+  for (const id of ids) if (state.issues.has(id)) wanted.add(id);
+  if (wanted.size === 0) return [];
+  const counts = countChildren(state.issues, state.statuses, wanted);
+  const changed: BoardIssue[] = [];
+  for (const id of wanted) {
+    const row = state.issues.get(id);
+    if (!row) continue;
+    const next = withChildCounts(row, counts.get(id));
+    if (!rowsEqual(row, next)) {
+      state.issues.set(id, next);
+      changed.push(next);
+    }
+  }
+  return changed;
+}
+
+// ---------------------------------------------------------------------------------------------
 // State and diff
 // ---------------------------------------------------------------------------------------------
 
@@ -391,6 +468,7 @@ export async function fetchBaseline(
     if (!inScope(row, statuses, since)) continue;
     issues.set(row.id, toBoardIssue(row, ready, statuses));
   }
+  stampChildCounts(issues, statuses);
   return { statuses, types, issues, ready, stats: statsResult };
 }
 
@@ -420,13 +498,28 @@ function removeRow(state: StateData, id: string, effect: EventEffect): void {
 /**
  * Apply one journal record to `state` in place. `record.issue` is the full post-mutation
  * state; counts and `parent` are not in it, so they are carried over from the previous row and
- * the ids touched by `dep_*`/`comment` are queued for a re-read.
+ * the ids touched by `dep_*`/`comment` are queued for a re-read. Afterwards the child counters
+ * of the row, of its previous and current parent and of a `dep_*` target are recomputed and the
+ * parent rows that changed join the upserts.
  */
 export function applyEvent(
   state: StateData,
   record: EventRecord,
   closedSinceDate: Date,
 ): EventEffect {
+  const id = record.issue_id;
+  const dirty = new Set<string>([id]);
+  const parentBefore = state.issues.get(id)?.parent;
+  if (parentBefore) dirty.add(parentBefore);
+  const effect = applyEventOp(state, record, closedSinceDate);
+  const parentAfter = state.issues.get(id)?.parent;
+  if (parentAfter) dirty.add(parentAfter);
+  if (record.dep?.target) dirty.add(record.dep.target);
+  for (const row of reconcileChildCounts(state, dirty)) upsertRow(state, row, effect);
+  return effect;
+}
+
+function applyEventOp(state: StateData, record: EventRecord, closedSinceDate: Date): EventEffect {
   const effect: EventEffect = { upserts: [], removes: [], refetch: [], readyDirty: true };
   const id = record.issue_id;
   const prev = state.issues.get(id);
@@ -510,16 +603,33 @@ export function applyDetails(
   state: StateData,
   details: IssueDetails,
   closedSinceDate: Date,
-): { upsert?: BoardIssue; remove?: string } {
+): { upsert?: BoardIssue; remove?: string; parents?: BoardIssue[] } {
   const prev = state.issues.get(details.id);
   const row = briefRow(details);
   row.dependency_count = countEdges(details.dependencies) ?? prev?.dependency_count ?? 0;
   row.dependent_count = countEdges(details.dependents) ?? prev?.dependent_count ?? 0;
+  const out: { upsert?: BoardIssue; remove?: string; parents?: BoardIssue[] } = {};
+  const dirty = new Set<string>([details.id]);
+  if (prev?.parent) dirty.add(prev.parent);
+  if (row.parent) dirty.add(row.parent);
   if (!inScope(row, state.statuses, closedSinceDate)) {
-    return state.issues.delete(details.id) ? { remove: details.id } : {};
+    if (state.issues.delete(details.id)) out.remove = details.id;
+  } else {
+    const next = toBoardIssue(row, state.ready, state.statuses);
+    if (prev?.child_count !== undefined) {
+      next.child_count = prev.child_count;
+      next.child_closed_count = prev.child_closed_count ?? 0;
+    }
+    if (!prev || !rowsEqual(prev, next)) {
+      state.issues.set(details.id, next);
+      out.upsert = next;
+    }
   }
-  const next = toBoardIssue(row, state.ready, state.statuses);
-  if (prev && rowsEqual(prev, next)) return {};
-  state.issues.set(details.id, next);
-  return { upsert: next };
+  // The row's own counters (if its children changed underneath) and both parents' counters.
+  const parents = reconcileChildCounts(state, dirty);
+  const self = parents.find((r) => r.id === details.id);
+  if (self) out.upsert = self;
+  const others = parents.filter((r) => r.id !== details.id);
+  if (others.length > 0) out.parents = others;
+  return out;
 }

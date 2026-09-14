@@ -10,10 +10,10 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 |---|---|
 | `index.html`, `main.tsx` | Bun HTML entry; mounts `<App />` into `#app`. |
 | `app.tsx` | Shell: loads `/api/meta`, switches views by route, keeps one live stream per displayed database, renders header, banner, drawer and toasts. |
-| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters), `Column`, `Card`, `DetailPanel`, `EmptyState`, `Toasts`, `VersionBanner`, `Popover`, `LiveIndicator`. |
-| `views/` | `BoardView` (columns per status), `EpicsView` (stage 4 placeholder listing epics with progress). |
-| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`), `live` (EventSource), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage`, `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
-| `state/` | Signals: `meta`, `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections, dismissed banner), `toasts`. |
+| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `Column` (flat and swimlane cell modes), `Card`, `Swimlane` (`SwimlaneBoard`, `LaneHeader`, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel`, `EmptyState`, `Toasts`, `VersionBanner`, `Popover`, `LiveIndicator`. |
+| `views/` | `BoardView` (columns per status, swimlanes per epic, drill-down), `EpicsView` (epic list with progress and expandable children). |
+| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`), `live` (EventSource), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage`, `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
+| `state/` | Signals: `meta`, `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner), `toasts`. |
 | `i18n/` | `en.json` (reference), `ru.json` (same keys), `index.ts` (`t`, `tOr`, language signal). |
 | `styles/` | `tokens.css` (design tokens, light and dark), `app.css` (all component styles). |
 | `dev/` | `mock-bff.ts` and `fixture.ts`: a `Bun.serve` implementation of the BFF API over an in-memory fixture, used for development and e2e. Not part of the product build. |
@@ -22,8 +22,10 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 
 Routes: `/p/<db>/board`, `/p/<db>/epics`, `/p/<db>/issue/<id>` (board with the detail drawer
 open). `/` redirects (client-side) to the default database's board. Quick filters live in the
-query string (`?q=…&type=a,b&label=…&assignee=…&priority=0,1`) and survive reloads and
-project switches keep the view but drop the filters.
+query string (`?q=…&type=a,b&label=…&assignee=…&priority=0,1`) and survive reloads;
+project switches keep the view but drop the filters. `?epic=<id>` on the board is the
+drill-down target (see Hierarchy); it travels with the filters but is not one of them: "Clear
+filters" keeps it, the breadcrumbs drop it.
 
 Base path discovery (`lib/basePath.ts`), in this order:
 
@@ -51,8 +53,12 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
   `DatabaseInfo` for the current database (from the snapshot or a `status` frame).
 - Failed `/snapshot` with `bddb_not_ready`, `db_unavailable` or `busy` shows the "starting"
   state and retries after `Retry-After` (default 3 s, capped at 30 s).
+- `hierarchy`: `HierarchyIndex` (`lib/hierarchy.ts`) over `allIssues`, rebuilt when the rows
+  change; every parent/children lookup of the views goes through it.
 - `prefs` persist in `localStorage` under `bddb.`: `theme`, `lang`, `actor`, `columnWidths`
-  (per status name), `collapsed` (per `status:priority`), `dismissedVersionWarning`. Every
+  (per status name), `collapsed` (per `status:priority`, or `status@<lane>:priority` inside a
+  swimlane), `groupByEpic` (default `true`), `collapsedLanes` (per epic id, `""` = no-epic
+  lane), `dismissedVersionWarning`. Every
   access is guarded; missing storage only means no persistence.
 
 ## Board rules
@@ -77,8 +83,64 @@ close button (URL returns to the board). Loads
 `GET /api/p/<db>/issues/<id>?include_comments=true&include_dependents=true` and re-reads
 silently when a delta changes the row's `updated_at`, `status` or `comment_count`. Markdown
 fields (`description`, `design`, `acceptance_criteria`, `notes`, comment text) go through
-`marked` (GFM) and `DOMPurify`. Children come from the snapshot (`parent === id`), dependencies
-and dependents from the response. Read-only in stage 3.
+`marked` (GFM) and `DOMPurify`. The Hierarchy section (parent chain, children from the snapshot,
+dependency tree) is described under Hierarchy; the "Depends on" / "Blocks" lists come from the
+response's `dependencies` / `dependents` without the `parent-child` edges. Read-only until stage 5.
+
+## Hierarchy (stage 4)
+
+Model (`lib/hierarchy.ts`, pure and unit-tested): the snapshot's `parent` links form the tree.
+`ancestorsOf` walks up (root first) and stops at a parent missing from the snapshot or at a
+repeated id; `descendantsOf` walks down once per node; `topEpicOf(issue)` is the topmost
+ancestor with `issue_type === "epic"` — the issue itself when it is an epic — or `null` when
+no epic is on the path (a task under a milestone is "no epic"). Epic progress (`progressOf`)
+uses the BFF's `child_count` / `child_closed_count` (direct children inside the snapshot, see
+`docs/bff-api.md`), falls back to `epic_*` counters if a row carries them, and last to counting
+the snapshot's direct children.
+
+Swimlanes (`components/Swimlane.tsx`, default on, toolbar toggle "Group by epic" persisted as
+`prefs.groupByEpic`): one lane per top-level epic, ordered by priority then `created_at` then
+id, and a final "No epic" lane. An epic's own card sits in its lane under its own status. The
+lane header shows the epic's glyph, id (click copies), title (opens the drawer), blocked badge,
+card count, progress bar `closed/total` from the server counters, and "Focus" (drill-down);
+the caret collapses the lane (`prefs.collapsedLanes`). The lane's epic comes from the full index,
+so a lane keeps its header when quick filters hide the epic row itself. Layout: the board is a
+CSS grid whose columns are the status columns (shared widths, resizable as before) and whose
+rows alternate lane header / lane body; every `Column` is a subgrid spanning all rows, so the DOM
+stays column-major (a card's nearest `[data-testid="column"]` is still its status) while lane
+headers span the full width in their own row. Column headers stick to the top of the scrolling
+board, lane headers under them; the lane header's content strip sticks to the left edge while
+the wide grid scrolls horizontally.
+
+Drill-down: `/p/<db>/board?epic=<id>` shows only the descendants of `<id>` (any depth), grouped
+into lanes by the epic's direct sub-epics plus a "Directly in <id>" lane; without sub-epics (or
+with grouping off) the board is flat. A strip under the toolbar carries the breadcrumbs
+`All issues › <epic ancestors…> › <epic>` (each crumb sets `?epic=` to that ancestor, the first
+clears it), the epic's progress and a "Details" link to its drawer. Entering: the lane's
+"Focus" button, "Open board" in the epics view, or the URL. Quick filters still apply inside a
+drill-down; an unknown id shows a "not in the snapshot" crumb with an empty board.
+
+Epics view (`/p/<db>/epics`, `views/EpicsView.tsx`): every epic of the snapshot (sub-epics
+included) sorted by priority then `created_at`, filtered by the toolbar's quick filters and by
+status chips (one per status some epic has, plus All). A row shows glyph, id, title (opens the
+drawer), blocked badge, status, priority, assignee, progress bar and "Open board" (drill-down).
+The caret expands the direct children as nested rows with the same columns; children with
+children (sub-epics, or any parent) expand further. Expansion state is per visit.
+
+Drawer: the "Hierarchy" section (`components/TreeView.tsx`) renders the parent chain as small
+breadcrumbs (each crumb opens that ancestor), the direct children from the snapshot (status,
+priority, blocked badge), then the dependency tree from
+`GET /api/p/<db>/dependencies/tree?root_id=<id>&direction=both&max_depth=3`. The answer is a
+flat DFS pre-order list; for `both` it is every "up" node (issues that depend on the root: its
+children via `parent-child`, issues it blocks) followed by the root and its "down" subtree
+(what the root depends on: its parent, its blockers). The section splits the list at the root
+into "Dependents" and "Dependencies", indents by `depth` and labels each row with
+`edge_from_parent` — `parent-child` edges read "child" (up) or "parent" (down) with a dashed
+chip, other kinds show the type (`blocks`, `tracks`, …). A node appears once per walk at the
+first path that reached it (bd's rule), so a child reachable through a blocking edge may be
+labelled `blocks`. Loading, error (with retry) and empty states are explicit. The blocked badge
+in the drawer header, on cards, lane headers and epic rows carries the same tooltip: open but
+not in the ready set — blocked by a dependency or deferred.
 
 ## i18n rules
 
@@ -129,15 +191,28 @@ e2e (Playwright, `tests/e2e`, config `playwright.config.ts`):
 ```sh
 bunx playwright install chromium          # once (plus `--with-deps` on a bare box)
 mise run e2e                              # E2E_TARGET=mock (default): starts the mock itself
-E2E_TARGET=real BDDB_URL=http://127.0.0.1:7331 E2E_DB=<db> mise run e2e   # against a running BFF
 ```
 
-Fixture-specific assertions are skipped when `E2E_TARGET` is not `mock`.
+Against the real BFF on the local stand (stage-3 acceptance; `mise run dev` brings the stand up,
+seeds `kb` and serves on 7331, the default `BDDB_URL`):
+
+```sh
+mise run dev &                                              # or: scripts/stand.sh up && scripts/stand.sh seed
+                                                            #     + `bun src/server/cli.ts serve` as in AGENTS.md
+E2E_TARGET=real E2E_DB=kb mise run e2e                      # BDDB_URL=http://127.0.0.1:7331 by default
+scripts/stand.sh down
+```
+
+Two Playwright projects: `chromium` runs `tests/e2e/board.spec.ts` (board, drawer, theme, language,
+filters, resize) and `tests/e2e/epics.spec.ts` (swimlanes, group toggle, drill-down, epics view,
+drawer hierarchy — the tests named `real:` pick an epic with children from the snapshot, so they
+run against both targets; fixture-only assertions are skipped when `E2E_TARGET` is not `mock`), then `live` runs `tests/e2e/live.spec.ts` (real only): while the board is open it
+creates an issue through `scripts/stand.sh create-issue "<title>"` and expects the card within
+10 s without a reload. `E2E_CREATE_ISSUE` replaces that command for another stand (it receives the
+title as its last argument and must print the new id).
 
 ## Deferred
 
-- Stage 4: epic swimlanes and drill-down on the board, the real epics view, the
-  parent/children/blockers tree in the drawer (`dependencies/tree`), breadcrumbs.
 - Stage 5: drag-and-drop (status, priority, parent) with guarded `PATCH`, close/reopen
   dialogs with reason and force, editing every field in the drawer, comments, labels,
   `blocks` edges, issue creation, `bd query` expression search, conflict dialog. The

@@ -69,8 +69,18 @@ type StatusDef = { name: string; category: "active" | "wip" | "frozen" | "done";
 // acceptance_criteria/notes), plus BFF-derived fields:
 type BoardIssue = IssueWithCounts & {
   blocked: boolean;            // status not in done/frozen category AND id not in `ready`
+  child_count?: number;        // direct children (rows with `parent === id`) inside the snapshot
+  child_closed_count?: number; // of those, in a done-category status
 };
 ```
+
+`child_count` / `child_closed_count` are present only on rows that have at least one child in
+the snapshot (absent = no children). They are derived from the snapshot rows — children closed
+before the closed window are not counted — so the board and the epics list need no per-epic
+detail call; `IssueDetails.epic_total_children` / `epic_closed_children` remain the exact
+figures. The counters are recomputed on every baseline and whenever a delta touches a child
+(create, status change, parent change, removal); the affected parent rows are included in that
+delta's `upserts`.
 
 Scope of `issues`: every issue that is **not** hidden by `bd serve` defaults (no `include_*`
 flags are ever sent), in every status of category active, wip and frozen, plus issues in

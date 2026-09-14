@@ -45,6 +45,8 @@ curl -s localhost:7331/api/p/kb/snapshot | jq '.issues | length'
 curl -N localhost:7331/api/p/kb/events &                                # snapshot, then deltas…
 (cd .stand/ws && bd q "from the CLI")                                    # …this arrives as a delta
 bun src/server/cli.ts doctor --dolt-host 127.0.0.1 --dolt-port 3399
+scripts/stand.sh create-issue "Live from CLI"                            # one issue via bd, prints its id
+E2E_TARGET=real BDDB_URL=http://127.0.0.1:7331 E2E_DB=kb mise run e2e   # e2e against this server (docs/ui.md)
 scripts/stand.sh down [--purge]
 ```
 

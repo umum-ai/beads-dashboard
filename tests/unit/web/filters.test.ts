@@ -43,6 +43,7 @@ describe("filters: URL round trip", () => {
       label: "lane:",
       assignee: "opus",
       priorities: [0, 2],
+      epic: "kb-e1",
     };
     const s = serializeFilters(f);
     expect(s.startsWith("?")).toBe(true);

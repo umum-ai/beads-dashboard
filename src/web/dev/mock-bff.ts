@@ -24,12 +24,14 @@ import type {
 import {
   addBulk,
   buildFixture,
+  childCounts,
   computeReady,
   type FixtureDb,
   type FixtureIssue,
   nextRevision,
   stripRevision,
   toDetails,
+  walkTree,
 } from "./fixture.ts";
 
 const PORT = Number(process.env.MOCK_PORT ?? process.env.BDDB_PORT ?? 7331);
@@ -110,10 +112,22 @@ function inScope(db: FixtureDb, r: FixtureIssue): boolean {
   return NOW() - Date.parse(r.closed_at) <= CLOSED_DAYS * 24 * 3600 * 1000;
 }
 
-function toBoard(db: FixtureDb, r: FixtureIssue, ready: Set<string>): BoardIssue {
+type Counts = ReturnType<typeof childCounts>;
+
+function toBoard(db: FixtureDb, r: FixtureIssue, ready: Set<string>, counts: Counts): BoardIssue {
   const status = r.status ?? "open";
   const blocked = !isDone(db, status) && !isFrozen(db, status) && !ready.has(r.id);
-  return { ...stripRevision(r), blocked };
+  const out: BoardIssue = { ...stripRevision(r), blocked };
+  const c = counts.get(r.id);
+  if (c && c.total > 0) {
+    out.child_count = c.total;
+    out.child_closed_count = c.closed;
+  }
+  return out;
+}
+
+function countsOf(db: FixtureDb): Counts {
+  return childCounts(db, (r) => inScope(db, r));
 }
 
 function stats(db: FixtureDb): Stats {
@@ -137,9 +151,10 @@ function stats(db: FixtureDb): Stats {
 
 function snapshot(db: FixtureDb): Snapshot {
   const ready = new Set(computeReady(db));
+  const counts = countsOf(db);
   const issues = [...db.issues.values()]
     .filter((r) => inScope(db, r))
-    .map((r) => toBoard(db, r, ready));
+    .map((r) => toBoard(db, r, ready, counts));
   return {
     seq: seqs.get(db.name) ?? 1,
     database: dbInfo(db),
@@ -172,12 +187,13 @@ function emitDelta(db: FixtureDb, ids: string[], removes: string[] = []): void {
   seqs.set(db.name, seq);
   lastSync.set(db.name, new Date().toISOString());
   const ready = new Set(computeReady(db));
+  const counts = countsOf(db);
   const upserts: BoardIssue[] = [];
   const gone = [...removes];
   for (const id of ids) {
     const r = db.issues.get(id);
     if (!r) gone.push(id);
-    else if (inScope(db, r)) upserts.push(toBoard(db, r, ready));
+    else if (inScope(db, r)) upserts.push(toBoard(db, r, ready, counts));
     else gone.push(id);
   }
   const delta: Delta = { seq, upserts, removes: gone, ready: [...ready], stats: stats(db) };
@@ -312,6 +328,38 @@ function listIssues(db: FixtureDb, url: URL): Response {
   const body: IssueListResponse = { items, has_more: hasMore };
   if (hasMore) body.next_cursor = String(offset + limit);
   return json(body);
+}
+
+const TREE_PARAMS = new Set(["root_id", "direction", "max_depth", "status"]);
+
+/** `GET dependencies/tree`: flat DFS `TreeNode`s (issue fields + depth/parent_id/edge). */
+function dependencyTree(db: FixtureDb, url: URL): Response {
+  for (const key of url.searchParams.keys()) {
+    if (!TREE_PARAMS.has(key)) {
+      return problem(400, "bddb_invalid_argument", `unknown query parameter ${key}`, {
+        param: key,
+        reason: "unknown_parameter",
+      });
+    }
+  }
+  const rootId = url.searchParams.get("root_id") ?? "";
+  if (!rootId) return problem(400, "invalid_argument", "root_id is required", { param: "root_id" });
+  if (!db.issues.has(rootId)) return problem(404, "not_found", `issue ${rootId} not found`);
+  const direction = url.searchParams.get("direction") ?? "down";
+  if (direction !== "down" && direction !== "up" && direction !== "both") {
+    return problem(400, "invalid_argument", "direction must be down, up or both", {
+      param: "direction",
+    });
+  }
+  const maxDepth = Number(url.searchParams.get("max_depth") ?? 50);
+  if (!Number.isInteger(maxDepth) || maxDepth < 1) {
+    return problem(400, "invalid_argument", "max_depth must be >= 1", { param: "max_depth" });
+  }
+  const items = walkTree(db, rootId, direction, maxDepth).map((item) => {
+    const r = db.issues.get(item.id) as FixtureIssue;
+    return { ...stripRevision(r), ...item, truncated: false };
+  });
+  return json({ items, has_more: false });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -556,6 +604,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (req.method === "GET") return listIssues(db, url);
     if (req.method === "POST") return createIssue(db, req);
   }
+  if (rest === "/dependencies/tree" && req.method === "GET") return dependencyTree(db, url);
   const im = rest.match(/^\/issues\/([^/]+)(\/(close|reopen|comments|claim|release))?$/);
   if (im) {
     const id = decodeURIComponent(im[1] as string);

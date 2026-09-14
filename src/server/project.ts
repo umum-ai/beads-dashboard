@@ -27,6 +27,7 @@ import {
   type DeltaBody,
   dictionariesEqual,
   fetchBaseline,
+  reconcileChildCounts,
   type StateData,
 } from "./snapshot.ts";
 import { BdServeSupervisor } from "./supervisor.ts";
@@ -381,10 +382,13 @@ export class DatabaseRuntime {
         const change = applyDetails(state, result.value, since);
         if (change.upsert) upsert(change.upsert);
         if (change.remove) body.removes.push(change.remove);
+        for (const parent of change.parents ?? []) upsert(parent);
         return;
       }
       if (result.reason instanceof ProblemError && result.reason.status === 404) {
+        const parent = state.issues.get(id)?.parent;
         if (state.issues.delete(id)) body.removes.push(id);
+        if (parent) for (const row of reconcileChildCounts(state, [parent])) upsert(row);
         return;
       }
       this.log.debug("row re-read failed; will retry on next event or poll", {

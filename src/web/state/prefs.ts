@@ -1,4 +1,4 @@
-/** UI preferences persisted in localStorage (`bddb.*`): theme, actor, column widths, sections. */
+/** UI preferences persisted in localStorage (`bddb.*`): theme, actor, column widths, sections, lanes. */
 import { effect, signal } from "@preact/signals";
 import { readStored, writeStored } from "../lib/storage.ts";
 
@@ -79,4 +79,27 @@ export const dismissedVersionWarning = signal<string | null>(
 export function dismissVersionWarning(text: string): void {
   dismissedVersionWarning.value = text;
   writeStored("dismissedVersionWarning", text);
+}
+
+/** Board grouping: swimlanes per top epic (default) or the flat board. */
+export const groupByEpic = signal<boolean>(readStored("groupByEpic", true));
+
+export function setGroupByEpic(next: boolean): void {
+  groupByEpic.value = next;
+  writeStored("groupByEpic", next);
+}
+
+/** Collapsed swimlanes keyed by epic id (`""` is the "no epic" lane). */
+export const collapsedLanes = signal<Record<string, true>>(readStored("collapsedLanes", {}));
+
+export function toggleLane(key: string): void {
+  const next = { ...collapsedLanes.value };
+  if (next[key]) delete next[key];
+  else next[key] = true;
+  collapsedLanes.value = next;
+  writeStored("collapsedLanes", next);
+}
+
+export function isLaneCollapsed(key: string): boolean {
+  return collapsedLanes.value[key] === true;
 }

@@ -29,10 +29,13 @@ interface SectionProps {
   status: string;
   section: PrioritySection;
   done: boolean;
+  /** Persistence key for the collapsed state; defaults to the status (swimlanes scope it). */
+  collapseKey?: string | undefined;
 }
 
-function Section({ db, status, section, done }: SectionProps): JSX.Element {
-  const collapsed = isSectionCollapsed(status, section.priority);
+export function Section({ db, status, section, done, collapseKey }: SectionProps): JSX.Element {
+  const key = collapseKey ?? status;
+  const collapsed = isSectionCollapsed(key, section.priority);
   const p = section.priority;
   return (
     <section
@@ -51,7 +54,7 @@ function Section({ db, status, section, done }: SectionProps): JSX.Element {
             ? t("board.section.expand", { priority: p })
             : t("board.section.collapse", { priority: p })
         }
-        onClick={() => toggleSection(status, p)}
+        onClick={() => toggleSection(key, p)}
       >
         <span class="section__caret" aria-hidden="true" />
         <span class="pchip pchip--outline">{t(`priority.${p}`)}</span>
@@ -78,10 +81,26 @@ export interface ColumnProps {
   showAll?:
     | { loaded: boolean; loading: boolean; total: number | null; onLoad: () => void }
     | undefined;
+  /**
+   * Swimlane mode: the column becomes a subgrid of the board and renders one cell per lane in
+   * the lane's grid row (`Swimlane.tsx` places the lane headers between them). `cards` must
+   * then be the union of every lane's cards (for the count).
+   */
+  lanes?: { key: string; cards: BoardIssue[]; collapsed: boolean }[] | undefined;
+  /** 1-based grid column in swimlane mode (lane headers span every column, so placement is explicit). */
+  gridColumn?: number | undefined;
+}
+
+/** Grid rows of the swimlane board: 1 = column headers, then (lane header, lane body) pairs. */
+export function laneHeaderRow(index: number): number {
+  return 2 + 2 * index;
+}
+export function laneBodyRow(index: number): number {
+  return 3 + 2 * index;
 }
 
 export function Column(props: ColumnProps): JSX.Element {
-  const { db, status, cards } = props;
+  const { db, status, cards, lanes } = props;
   const done = status.category === "done";
   const width = columnWidths.value[status.name] ?? DEFAULT_COLUMN_WIDTH;
   const [resizing, setResizing] = useState(false);
@@ -117,14 +136,16 @@ export function Column(props: ColumnProps): JSX.Element {
 
   return (
     <section
-      class={`column${resizing ? " column--resizing" : ""}`}
-      style={{ width: `${width}px` }}
+      class={`column${resizing ? " column--resizing" : ""}${lanes ? " column--lanes" : ""}`}
+      style={
+        lanes ? { width: `${width}px`, gridColumn: props.gridColumn } : { width: `${width}px` }
+      }
       data-category={status.category}
       data-status={status.name}
       data-testid="column"
       aria-label={statusLabel(status.name)}
     >
-      <header class="column__head">
+      <header class="column__head" style={lanes ? { gridRow: 1 } : undefined}>
         <h2 class="column__name ellipsis" title={status.name}>
           {statusLabel(status.name)}
         </h2>
@@ -137,23 +158,52 @@ export function Column(props: ColumnProps): JSX.Element {
           </span>
         ) : null}
       </header>
-      <div class="column__body">
-        {sections.length === 0 ? (
-          <p class="column__empty">{t("board.column.empty")}</p>
-        ) : (
-          sections.map((section) => (
-            <Section
-              key={section.priority}
-              db={db}
-              status={status.name}
-              section={section}
-              done={done}
-            />
-          ))
-        )}
-      </div>
+      {lanes ? (
+        lanes.map((lane, index) => (
+          <div
+            key={lane.key}
+            class={`lane-cell${lane.collapsed ? " lane-cell--collapsed" : ""}`}
+            style={{ gridRow: laneBodyRow(index) }}
+            data-testid="lane-cell"
+            data-lane={lane.key}
+            data-status={status.name}
+          >
+            {lane.collapsed
+              ? null
+              : sectionize(lane.cards).map((section) => (
+                  <Section
+                    key={section.priority}
+                    db={db}
+                    status={status.name}
+                    section={section}
+                    done={done}
+                    collapseKey={`${status.name}@${lane.key}`}
+                  />
+                ))}
+          </div>
+        ))
+      ) : (
+        <div class="column__body">
+          {sections.length === 0 ? (
+            <p class="column__empty">{t("board.column.empty")}</p>
+          ) : (
+            sections.map((section) => (
+              <Section
+                key={section.priority}
+                db={db}
+                status={status.name}
+                section={section}
+                done={done}
+              />
+            ))
+          )}
+        </div>
+      )}
       {done && props.showAll ? (
-        <footer class="column__foot">
+        <footer
+          class="column__foot"
+          style={lanes ? { gridRow: laneHeaderRow(lanes.length) } : undefined}
+        >
           {props.showAll.loaded ? (
             <span class="column__hint" style="margin-left: 0">
               {t("board.showAllClosed.loaded", { count: cards.length })}
