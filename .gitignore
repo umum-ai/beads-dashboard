@@ -1,0 +1,7 @@
+tmp/
+node_modules/
+dist/
+.mise.local.toml
+*.log
+.rumdl_cache/
+.stand/

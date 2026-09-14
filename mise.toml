@@ -1,0 +1,40 @@
+# Toolchain and task runner for bddb. See AGENTS.md for the workflow.
+[tools]
+bun = "1.4"
+"github:gastownhall/beads" = "1.3.0-rc.2"
+"aqua:dolthub/dolt" = "2.3"
+biome = "2"
+actionlint = "1.7.7"
+hadolint = "2.15.1"
+
+[tasks.dev]
+description = "Run the BFF with hot reload"
+run = "bun --hot src/server/main.ts"
+
+[tasks.lint]
+description = "Biome check (format + lint), read-only"
+run = "biome check ."
+
+[tasks."lint:fix"]
+description = "Biome check with safe fixes applied"
+run = "biome check --write ."
+
+[tasks.typecheck]
+description = "TypeScript type check without emit"
+run = "bunx tsc --noEmit"
+
+[tasks.test]
+description = "Unit tests"
+run = "bun test tests/unit"
+
+[tasks.contract]
+description = "Contract tests against a real bd serve (placeholder until stage 1)"
+run = "bun test tests/contract"
+
+[tasks.e2e]
+description = "End-to-end tests (placeholder until stage 3)"
+run = "echo 'e2e: not implemented yet (stage 3)'"
+
+[tasks."docker:build"]
+description = "Build the bddb container image (Dockerfile arrives in stage 6)"
+run = "docker build -t bddb ."

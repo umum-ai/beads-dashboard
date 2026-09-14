@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "beads (bd) version pinned in mise.toml",
+      "managerFilePatterns": ["/^mise\\.toml$/"],
+      "matchStrings": ["\"github:gastownhall/beads\"\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "gastownhall/beads",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "beads version matrix in CI",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["beads-version:\\s*\\[\\s*\"(?<currentValue>[^\"]+)\"\\s*\\]"],
+      "depNameTemplate": "gastownhall/beads",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["gastownhall/beads"],
+      "groupName": "beads",
+      "ignoreUnstable": false
+    }
+  ]
+}

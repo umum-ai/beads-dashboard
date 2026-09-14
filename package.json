@@ -1,0 +1,34 @@
+{
+  "name": "bddb",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kanban dashboard for beads, built on the bd serve HTTP API",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "bddb": "src/server/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun --hot src/server/main.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests/unit",
+    "contract": "bun test tests/contract",
+    "e2e": "echo 'e2e: not implemented yet (stage 3)'",
+    "docker:build": "docker build -t bddb ."
+  },
+  "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^3.1.0",
+    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^2.2.1",
+    "@preact/signals": "^2.11.2",
+    "dompurify": "^3.4.15",
+    "marked": "^18.0.13",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5"
+  }
+}
