@@ -44,6 +44,7 @@ describe("filters: URL round trip", () => {
       assignee: "opus",
       priorities: [0, 2],
       epic: "kb-e1",
+      query: "status=open AND priority<=1",
     };
     const s = serializeFilters(f);
     expect(s.startsWith("?")).toBe(true);

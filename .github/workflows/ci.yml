@@ -27,6 +27,8 @@ jobs:
       - run: mise run typecheck
       - run: mise run gen:api:check
       - run: mise run test
+      - run: mise run build
+      - run: scripts/check-pins.sh
       - run: actionlint
 
   contract:
@@ -75,3 +77,32 @@ jobs:
             .stand/**/*.log
             .stand/**/stand.env
           if-no-files-found: ignore
+
+  docker:
+    name: hadolint, image build (runner arch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+      - run: hadolint Dockerfile
+      - run: scripts/check-pins.sh
+      - id: pins
+        run: echo "beads=$(scripts/check-pins.sh --print)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: bddb:ci
+          build-args: BEADS_VERSION=${{ steps.pins.outputs.beads }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image answers `bddb version`, carries the beads label
+        run: |
+          docker run --rm bddb:ci version
+          label="$(docker inspect bddb:ci --format '{{index .Config.Labels "org.beads.version"}}')"
+          [ "$label" = "${{ steps.pins.outputs.beads }}" ] || { echo "::error::org.beads.version=$label"; exit 1; }

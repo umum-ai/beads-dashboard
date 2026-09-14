@@ -1,7 +1,9 @@
 /** Application shell: meta bootstrap, route switching, live connection per database. */
 import { useSignalEffect } from "@preact/signals";
 import { useEffect } from "preact/hooks";
+import { CreateIssueModal } from "./components/CreateIssueModal.tsx";
 import { DetailPanel } from "./components/DetailPanel.tsx";
+import { DialogHost } from "./components/Dialog.tsx";
 import { EmptyState } from "./components/EmptyState.tsx";
 import { Header } from "./components/Header.tsx";
 import { Toasts } from "./components/Toasts.tsx";
@@ -93,6 +95,8 @@ export function App() {
         {content}
         {r.kind === "issue" ? <DetailPanel db={r.db} id={r.issueId} /> : null}
       </main>
+      {"db" in r ? <CreateIssueModal db={r.db} /> : null}
+      <DialogHost />
       <Toasts />
     </>
   );

@@ -64,7 +64,7 @@ test("detail panel renders markdown, children and comments from the fixture", as
   await expect(panel.getByTestId("detail-comments").locator(".comment")).toHaveCount(2);
   await panel.getByTestId("detail-children").locator("button").first().click();
   await expect(page).toHaveURL(/\/issue\/sp-a1f\.\d$/);
-  await expect(panel.getByTestId("detail-parent")).toHaveText("sp-a1f");
+  await expect(panel.getByTestId("detail-parent")).toContainText("sp-a1f");
 });
 
 test("theme toggle flips data-theme and persists across reloads", async ({ page }) => {

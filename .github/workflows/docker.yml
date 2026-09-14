@@ -1,0 +1,81 @@
+name: Docker
+
+# Multi-arch image → ghcr.io/umum-ai/bddb. Pull requests only build (no push, no registry login).
+# Tags: sha-<short> always; on main also `latest`; on a `vX.Y.Z` tag also `X.Y.Z` and `X.Y`.
+# BEADS_VERSION comes from the mise.toml pin (scripts/check-pins.sh --print) — one source of truth.
+# release.yml starts this workflow on the release tag through workflow_dispatch (a tag created with
+# GITHUB_TOKEN does not fire `push: tags`).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/umum-ai/bddb
+
+jobs:
+  image:
+    name: build${{ github.event_name != 'pull_request' && ' + push' || '' }} (amd64, arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pins agree (mise.toml, Dockerfile, version.ts, CI matrix)
+        run: scripts/check-pins.sh
+
+      - name: Read BEADS_VERSION from mise.toml
+        id: pins
+        run: echo "beads=$(scripts/check-pins.sh --print)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags, OCI labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=bddb
+            org.opencontainers.image.description=Kanban dashboard for beads over the bd serve HTTP API
+            org.opencontainers.image.licenses=MIT
+            org.beads.version=${{ steps.pins.outputs.beads }}
+
+      - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BEADS_VERSION=${{ steps.pins.outputs.beads }}
+            BDDB_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false

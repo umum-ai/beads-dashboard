@@ -1,87 +1,104 @@
 /**
- * Read-only issue drawer. Loads `GET issues/{id}?include_comments&include_dependents`, renders
- * every field, markdown texts, relations and comments. Re-loads when a delta touches the row.
- * Editing arrives in stage 5.
+ * Issue drawer. Loads `GET issues/{id}?include_comments&include_dependents` (the source of
+ * `revision`), re-loads silently when a delta touches the row — unless an inline editor is
+ * open, in which case the held revision makes a concurrent write show up as the conflict
+ * dialog on Save (`detail/editor.ts`). Sub-components: `detail/Fields` (properties),
+ * `detail/TextSections` (markdown fields), `detail/Relations` (comments, dependencies),
+ * `TreeView` (hierarchy).
  */
 import { useSignalEffect } from "@preact/signals";
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
-import { locale, t } from "../i18n/index.ts";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { t } from "../i18n/index.ts";
 import { ApiError, api } from "../lib/api.ts";
 import type { BoardIssue, IssueDetails } from "../lib/bff-types.ts";
 import { clampPriority, compareCards } from "../lib/board.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
-import { renderMarkdown } from "../lib/markdown.ts";
-import { formatDate, formatDateTime } from "../lib/time.ts";
 import { navigate } from "../state/route.ts";
 import { board, childrenOf } from "../state/snapshot.ts";
 import { describeError } from "../state/toasts.ts";
 import { copyId, typeLabel } from "./Card.tsx";
 import { statusLabel } from "./Column.tsx";
+import { type Editor, useEditor } from "./detail/editor.ts";
+import { Fields } from "./detail/Fields.tsx";
+import { Comments, Dependencies } from "./detail/Relations.tsx";
+import { TextSections } from "./detail/TextSections.tsx";
 import { EmptyState } from "./EmptyState.tsx";
 import { HierarchySection } from "./TreeView.tsx";
 
-interface RelatedRow {
-  id: string;
-  title: string;
-  status?: string | undefined;
-  issue_type?: string | undefined;
-  kind?: string | undefined;
-}
-
-function RelatedList({ db, rows, testId }: { db: string; rows: RelatedRow[]; testId: string }) {
+function Title({ d, editor }: { d: IssueDetails; editor: Editor }): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.title);
+  const input = useRef<HTMLInputElement>(null);
+  const start = () => {
+    setDraft(d.title);
+    setEditing(true);
+    editor.beginEdit();
+    setTimeout(() => input.current?.select(), 0);
+  };
+  const stop = () => {
+    setEditing(false);
+    editor.endEdit();
+  };
+  const save = async () => {
+    const next = draft.trim();
+    if (!next || next === d.title) return stop();
+    if ((await editor.save({ title: next })) !== "failed") stop();
+  };
+  if (!editing) {
+    return (
+      <div class="drawer__titlerow">
+        <h2 class="drawer__title" id="drawer-title" data-testid="detail-title">
+          {d.title}
+        </h2>
+        <button
+          type="button"
+          class="btn btn--ghost drawer__edit"
+          data-testid="edit-title"
+          onClick={start}
+        >
+          {t("detail.edit")}
+        </button>
+      </div>
+    );
+  }
   return (
-    <ul class="rel-list" data-testid={testId}>
-      {rows.map((row) => (
-        <li key={`${row.kind ?? ""}:${row.id}`}>
-          <button
-            type="button"
-            class="rel"
-            onClick={() => navigate({ kind: "issue", db, issueId: row.id })}
-          >
-            <span aria-hidden="true">{typeGlyph(row.issue_type)}</span>
-            <span class="mono">{row.id}</span>
-            <span class="rel__title ellipsis" title={row.title}>
-              {row.title}
-            </span>
-            {row.kind && row.kind !== "parent-child" ? (
-              <span class="rel__kind">{row.kind}</span>
-            ) : null}
-            <span class="rel__status">{statusLabel(row.status ?? "open")}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Prop({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: JSX.Element | string | number | null | undefined;
-  mono?: boolean | undefined;
-}): JSX.Element {
-  const empty = value === undefined || value === null || value === "";
-  return (
-    <>
-      <dt>{label}</dt>
-      <dd class={`${empty ? "muted" : ""}${mono ? " mono" : ""}`.trim()}>
-        {empty ? t("detail.empty") : value}
-      </dd>
-    </>
-  );
-}
-
-function MarkdownSection({ title, source }: { title: string; source: string | undefined }) {
-  if (!source) return null;
-  return (
-    <section class="drawer__section">
-      <h3 class="drawer__h">{title}</h3>
-      <div class="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(source) }} />
-    </section>
+    <form
+      class="drawer__titleedit"
+      data-testid="title-editor"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <input
+        ref={input}
+        class="input drawer__titleinput"
+        type="text"
+        value={draft}
+        aria-label={t("create.field.title")}
+        data-testid="title-input"
+        onInput={(e) => setDraft((e.currentTarget as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            stop();
+          }
+        }}
+      />
+      <button type="button" class="btn btn--ghost" onClick={stop}>
+        {t("dialog.cancel")}
+      </button>
+      <button
+        type="submit"
+        class="btn btn--primary"
+        disabled={editor.saving}
+        data-testid="save-title"
+      >
+        {t("detail.save")}
+      </button>
+    </form>
   );
 }
 
@@ -91,44 +108,64 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
   const [loading, setLoading] = useState(true);
   const closeBtn = useRef<HTMLButtonElement>(null);
   const lastStamp = useRef<string | null>(null);
+  const pendingReload = useRef(false);
 
   const close = () => navigate({ kind: "board", db });
 
-  const load = (silent = false) => {
-    if (!silent) {
-      setLoading(true);
-      setError(null);
-    }
-    api
-      .issue(db, id)
-      .then((d) => {
-        setDetails(d);
+  const load = useCallback(
+    (silent = false) => {
+      if (!silent) {
+        setLoading(true);
         setError(null);
-      })
-      .catch((err) => {
-        if (!silent) setError(err);
-      })
-      .finally(() => setLoading(false));
-  };
+      }
+      api
+        .issue(db, id)
+        .then((d) => {
+          setDetails(d);
+          setError(null);
+        })
+        .catch((err) => {
+          if (!silent) setError(err);
+        })
+        .finally(() => setLoading(false));
+    },
+    [db, id],
+  );
+  const reload = useCallback(() => load(true), [load]);
+  const editor = useEditor(db, id, details, setDetails, reload);
+  const editingRef = useRef(0);
+  editingRef.current = editor.editing;
 
   useEffect(() => {
     setDetails(null);
     lastStamp.current = null;
     load();
     closeBtn.current?.focus();
-  }, [db, id]);
+  }, [load]);
 
-  // A delta that changes this row (updated_at or status) re-reads the details silently.
+  // A delta that changes this row re-reads the details silently — deferred while an editor is
+  // open so the save conflicts (and asks) instead of adopting the other writer's revision.
   useSignalEffect(() => {
     const row: BoardIssue | undefined = board.value.issues.get(id);
     const stamp = row ? `${row.updated_at}|${row.status ?? ""}|${row.comment_count ?? 0}` : null;
-    if (stamp && lastStamp.current && stamp !== lastStamp.current) load(true);
+    if (stamp && lastStamp.current && stamp !== lastStamp.current) {
+      if (editingRef.current > 0) pendingReload.current = true;
+      else load(true);
+    }
     if (stamp) lastStamp.current = stamp;
   });
+  useEffect(() => {
+    if (editor.editing === 0 && pendingReload.current) {
+      pendingReload.current = false;
+      load(true);
+    }
+  }, [editor.editing, load]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented) {
+        const target = event.target as HTMLElement | null;
+        if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
         event.preventDefault();
         close();
       }
@@ -137,13 +174,8 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
     return () => document.removeEventListener("keydown", onKey);
   });
 
-  const lang = locale.value;
   const d = details;
   const children = childrenOf(id).sort(compareCards);
-  // bd lists `parent-child` edges among dependencies/dependents; the drawer shows those through
-  // the Parent field and the Children section, so the blocking lists keep the other kinds only.
-  const dependsOn = (d?.dependencies ?? []).filter((x) => x.dependency_type !== "parent-child");
-  const blocks = (d?.dependents ?? []).filter((x) => x.dependency_type !== "parent-child");
   const priority = d ? clampPriority(d.priority) : null;
   const notFound = error instanceof ApiError && error.status === 404;
   const blocked = board.value.issues.get(id)?.blocked || d?.is_blocked === true;
@@ -162,6 +194,7 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
         aria-labelledby="drawer-title"
         data-testid="detail-panel"
         data-id={id}
+        aria-busy={editor.saving ? "true" : undefined}
       >
         <header class="drawer__head">
           <button
@@ -183,6 +216,7 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
               {t("detail.blocked")}
             </span>
           ) : null}
+          {editor.saving ? <span class="drawer__saving">{t("detail.saving")}</span> : null}
           <span class="header__spacer" />
           <button
             type="button"
@@ -210,9 +244,7 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
           ) : null}
           {d ? (
             <>
-              <h2 class="drawer__title" id="drawer-title" data-testid="detail-title">
-                {d.title}
-              </h2>
+              <Title d={d} editor={editor} />
               <div class="drawer__badges">
                 <span class="chip" data-testid="detail-status">
                   {statusLabel(d.status ?? "open")}
@@ -226,148 +258,23 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
                     class="pchip"
                     data-priority={priority}
                     title={t(`priority.name.${priority}`)}
+                    data-testid="detail-priority"
                   >
                     {t(`priority.${priority}`)}
                   </span>
                 ) : null}
-                {(d.labels ?? []).map((label) => (
-                  <span key={label} class="chip chip--label" title={label}>
-                    {label}
-                  </span>
-                ))}
-              </div>
-              <dl class="props">
-                <Prop label={t("detail.field.assignee")} value={d.assignee} />
-                {d.owner ? <Prop label={t("detail.field.owner")} value={d.owner} /> : null}
-                <Prop
-                  label={t("detail.field.parent")}
-                  value={
-                    d.parent ? (
-                      <button
-                        type="button"
-                        class="btn btn--ghost mono"
-                        style="height: 22px; padding: 0 6px"
-                        data-testid="detail-parent"
-                        onClick={() => navigate({ kind: "issue", db, issueId: d.parent as string })}
-                      >
-                        {d.parent}
-                      </button>
-                    ) : null
-                  }
-                />
                 {totalChildren !== undefined ? (
-                  <Prop
-                    label={t("detail.field.epicProgress")}
-                    value={`${closedChildren ?? 0} / ${totalChildren}`}
-                  />
+                  <span class="chip" title={t("detail.field.epicProgress")}>
+                    {closedChildren ?? 0} / {totalChildren}
+                  </span>
                 ) : null}
-                <Prop
-                  label={t("detail.field.created")}
-                  value={
-                    <span title={d.created_at}>
-                      {formatDateTime(d.created_at, lang)}
-                      {d.created_by ? ` · ${d.created_by}` : ""}
-                    </span>
-                  }
-                />
-                <Prop
-                  label={t("detail.field.updated")}
-                  value={<span title={d.updated_at}>{formatDateTime(d.updated_at, lang)}</span>}
-                />
-                {d.closed_at ? (
-                  <Prop
-                    label={t("detail.field.closed")}
-                    value={<span title={d.closed_at}>{formatDateTime(d.closed_at, lang)}</span>}
-                  />
-                ) : null}
-                {d.close_reason ? (
-                  <Prop label={t("detail.field.closeReason")} value={d.close_reason} />
-                ) : null}
-                {d.due_at ? (
-                  <Prop label={t("detail.field.due")} value={formatDate(d.due_at, lang)} />
-                ) : null}
-                {d.defer_until ? (
-                  <Prop
-                    label={t("detail.field.deferUntil")}
-                    value={formatDate(d.defer_until, lang)}
-                  />
-                ) : null}
-                {d.estimated_minutes ? (
-                  <Prop
-                    label={t("detail.field.estimate")}
-                    value={t("detail.field.estimate.minutes", { minutes: d.estimated_minutes })}
-                  />
-                ) : null}
-                {d.external_ref ? (
-                  <Prop label={t("detail.field.externalRef")} value={d.external_ref} mono />
-                ) : null}
-                <Prop label={t("detail.field.revision")} value={d.revision} mono />
-              </dl>
+              </div>
 
-              <MarkdownSection title={t("detail.section.description")} source={d.description} />
-              <MarkdownSection title={t("detail.section.design")} source={d.design} />
-              <MarkdownSection
-                title={t("detail.section.acceptance")}
-                source={d.acceptance_criteria}
-              />
-              <MarkdownSection title={t("detail.section.notes")} source={d.notes} />
-
+              <Fields db={db} d={d} editor={editor} reload={reload} />
+              <TextSections d={d} editor={editor} />
               <HierarchySection db={db} id={id} row={board.value.issues.get(id)} title={d.title} />
-
-              {dependsOn.length ? (
-                <section class="drawer__section">
-                  <h3 class="drawer__h">
-                    {t("detail.section.dependencies", { count: dependsOn.length })}
-                  </h3>
-                  <RelatedList
-                    db={db}
-                    testId="detail-dependencies"
-                    rows={dependsOn.map((x) => ({ ...x, kind: x.dependency_type }))}
-                  />
-                </section>
-              ) : null}
-
-              {blocks.length ? (
-                <section class="drawer__section">
-                  <h3 class="drawer__h">
-                    {t("detail.section.dependents", { count: blocks.length })}
-                  </h3>
-                  <RelatedList
-                    db={db}
-                    testId="detail-dependents"
-                    rows={blocks.map((x) => ({ ...x, kind: x.dependency_type }))}
-                  />
-                </section>
-              ) : null}
-
-              <section class="drawer__section">
-                <h3 class="drawer__h">
-                  {t("detail.section.comments", {
-                    count: d.comments?.length ?? d.comment_count ?? 0,
-                  })}
-                </h3>
-                {d.comments_omitted ? (
-                  <p class="empty-note">{t("detail.comments.omitted")}</p>
-                ) : null}
-                {d.comments?.length ? (
-                  <div data-testid="detail-comments">
-                    {d.comments.map((c) => (
-                      <article key={c.id} class="comment">
-                        <div class="comment__head">
-                          <span class="comment__author">{c.author}</span>
-                          <span title={c.created_at}>{formatDateTime(c.created_at, lang)}</span>
-                        </div>
-                        <div
-                          class="md"
-                          dangerouslySetInnerHTML={{ __html: renderMarkdown(c.text) }}
-                        />
-                      </article>
-                    ))}
-                  </div>
-                ) : !d.comments_omitted ? (
-                  <p class="empty-note">{t("detail.comments.none")}</p>
-                ) : null}
-              </section>
+              <Dependencies db={db} d={d} reload={reload} />
+              <Comments db={db} d={d} reload={reload} />
             </>
           ) : null}
         </div>

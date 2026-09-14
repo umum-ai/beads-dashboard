@@ -9,6 +9,8 @@ export interface Filters {
   priorities: number[];
   /** Drill-down: show only the descendants of this epic (`?epic=<id>`); not a quick filter. */
   epic: string;
+  /** Advanced search: a `bd query` expression (`?query=…`) that replaces the board's issue set. */
+  query: string;
 }
 
 export const EMPTY_FILTERS: Filters = {
@@ -18,6 +20,7 @@ export const EMPTY_FILTERS: Filters = {
   assignee: "",
   priorities: [],
   epic: "",
+  query: "",
 };
 
 export function parseFilters(search: string): Filters {
@@ -34,6 +37,7 @@ export function parseFilters(search: string): Filters {
     assignee: params.get("assignee") ?? "",
     priorities: [...new Set(priorities)].sort(),
     epic: params.get("epic") ?? "",
+    query: params.get("query") ?? "",
   };
 }
 
@@ -45,11 +49,12 @@ export function serializeFilters(f: Filters): string {
   if (f.assignee) params.set("assignee", f.assignee);
   if (f.priorities.length) params.set("priority", f.priorities.join(","));
   if (f.epic) params.set("epic", f.epic);
+  if (f.query) params.set("query", f.query);
   const s = params.toString();
   return s ? `?${s}` : "";
 }
 
-/** Quick filters only: the drill-down `epic` is not a filter the toolbar clears. */
+/** Quick filters only: the drill-down `epic` and the `query` expression are not cleared with them. */
 export function isFilterEmpty(f: Filters): boolean {
   return !f.q && !f.types.length && !f.label && !f.assignee && !f.priorities.length;
 }

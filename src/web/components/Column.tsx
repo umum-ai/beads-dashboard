@@ -1,14 +1,20 @@
 /**
- * One status column: header with count, priority sections (collapsible, persisted), optional
- * "show all closed" footer for done-category statuses, and a drag handle on the right edge
- * that resizes the column (persisted per status name). Section bodies are the future drop
- * zones for stage 5 (`data-drop-status` / `data-drop-priority` mark them already).
+ * One status column: header with count and a "+" (new issue in this status), priority sections
+ * (collapsible, persisted), optional "show all closed" footer for done-category statuses, and a
+ * drag handle on the right edge that resizes the column (persisted per status name).
+ *
+ * Drag-and-drop: every section body is a drop zone (`data-drop-status` / `data-drop-priority`);
+ * while a card is dragged, the sections that are empty appear too, so any priority can be
+ * targeted. In swimlane mode each lane cell is a zone as well (status + lane).
  */
 import type { JSX } from "preact";
 import { useRef, useState } from "preact/hooks";
 import { t, tOr } from "../i18n/index.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
-import { type PrioritySection, sectionize } from "../lib/board.ts";
+import { PRIORITIES, type Priority, type PrioritySection, sectionize } from "../lib/board.ts";
+import { useDropZone } from "../lib/dnd.ts";
+import type { DropLane } from "../lib/dnd-intent.ts";
+import { openCreate } from "../state/create.ts";
 import {
   columnWidths,
   DEFAULT_COLUMN_WIDTH,
@@ -18,6 +24,7 @@ import {
   setColumnWidth,
   toggleSection,
 } from "../state/prefs.ts";
+import { dragging } from "../state/selection.ts";
 import { Card } from "./Card.tsx";
 
 export function statusLabel(name: string): string {
@@ -31,19 +38,32 @@ interface SectionProps {
   done: boolean;
   /** Persistence key for the collapsed state; defaults to the status (swimlanes scope it). */
   collapseKey?: string | undefined;
+  /** Swimlane this section belongs to (drop target parent), absent on the flat board. */
+  lane?: DropLane | undefined;
+  /** Rendered only because a drag is in progress (no cards of its own). */
+  placeholder?: boolean | undefined;
 }
 
-export function Section({ db, status, section, done, collapseKey }: SectionProps): JSX.Element {
+export function Section(props: SectionProps): JSX.Element {
+  const { db, status, section, done, collapseKey, lane } = props;
   const key = collapseKey ?? status;
-  const collapsed = isSectionCollapsed(key, section.priority);
+  const collapsed = isSectionCollapsed(key, section.priority) && !props.placeholder;
   const p = section.priority;
+  const ref = useRef<HTMLElement>(null);
+  const over = useDropZone(ref, { status, priority: p, lane });
+  const classes = ["section"];
+  if (collapsed) classes.push("section--collapsed");
+  if (over) classes.push("section--over");
+  if (props.placeholder) classes.push("section--placeholder");
   return (
     <section
-      class={`section${collapsed ? " section--collapsed" : ""}`}
+      ref={ref}
+      class={classes.join(" ")}
       data-priority={p}
       data-testid="section"
       data-drop-status={status}
       data-drop-priority={p}
+      data-over={over ? "true" : undefined}
     >
       <button
         type="button"
@@ -64,12 +84,31 @@ export function Section({ db, status, section, done, collapseKey }: SectionProps
       {collapsed ? null : (
         <div class="section__cards">
           {section.cards.map((card) => (
-            <Card key={card.id} db={db} issue={card} done={done} />
+            <Card key={card.id} db={db} issue={card} done={done} lane={lane?.key} />
           ))}
+          {props.placeholder || over ? (
+            <div class="section__drop" aria-hidden="true">
+              {t("board.dropHere")}
+            </div>
+          ) : null}
         </div>
       )}
     </section>
   );
+}
+
+/** Sections of `cards`; while dragging, every priority is present (empty ones as placeholders). */
+function sectionsFor(
+  cards: BoardIssue[],
+  dragActive: boolean,
+): Array<PrioritySection & { placeholder: boolean }> {
+  const real = sectionize(cards);
+  if (!dragActive) return real.map((s) => ({ ...s, placeholder: false }));
+  const byPriority = new Map(real.map((s) => [s.priority, s]));
+  return PRIORITIES.map((p: Priority) => {
+    const s = byPriority.get(p);
+    return s ? { ...s, placeholder: false } : { priority: p, cards: [], placeholder: true };
+  });
 }
 
 export interface ColumnProps {
@@ -86,7 +125,7 @@ export interface ColumnProps {
    * the lane's grid row (`Swimlane.tsx` places the lane headers between them). `cards` must
    * then be the union of every lane's cards (for the count).
    */
-  lanes?: { key: string; cards: BoardIssue[]; collapsed: boolean }[] | undefined;
+  lanes?: { key: string; parentId: string; cards: BoardIssue[]; collapsed: boolean }[] | undefined;
   /** 1-based grid column in swimlane mode (lane headers span every column, so placement is explicit). */
   gridColumn?: number | undefined;
 }
@@ -99,13 +138,53 @@ export function laneBodyRow(index: number): number {
   return 3 + 2 * index;
 }
 
+function LaneCell(props: {
+  db: string;
+  status: StatusDef;
+  lane: { key: string; parentId: string; cards: BoardIssue[]; collapsed: boolean };
+  index: number;
+  dragActive: boolean;
+}): JSX.Element {
+  const { db, status, lane, index } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  const dropLane: DropLane = { key: lane.key, parentId: lane.parentId };
+  const over = useDropZone(ref, { status: status.name, lane: dropLane }, !lane.collapsed);
+  return (
+    <div
+      ref={ref}
+      class={`lane-cell${lane.collapsed ? " lane-cell--collapsed" : ""}${over ? " lane-cell--over" : ""}`}
+      style={{ gridRow: laneBodyRow(index) }}
+      data-testid="lane-cell"
+      data-lane={lane.key}
+      data-status={status.name}
+    >
+      {lane.collapsed
+        ? null
+        : sectionsFor(lane.cards, props.dragActive).map((section) => (
+            <Section
+              key={section.priority}
+              db={db}
+              status={status.name}
+              section={section}
+              done={status.category === "done"}
+              collapseKey={`${status.name}@${lane.key}`}
+              lane={dropLane}
+              placeholder={section.placeholder}
+            />
+          ))}
+    </div>
+  );
+}
+
 export function Column(props: ColumnProps): JSX.Element {
   const { db, status, cards, lanes } = props;
   const done = status.category === "done";
   const width = columnWidths.value[status.name] ?? DEFAULT_COLUMN_WIDTH;
   const [resizing, setResizing] = useState(false);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
-  const sections = sectionize(cards);
+  const dragActive = dragging.value !== null;
+  const body = useRef<HTMLDivElement>(null);
+  const bodyOver = useDropZone(body, { status: status.name }, !lanes);
 
   const onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
@@ -134,6 +213,8 @@ export function Column(props: ColumnProps): JSX.Element {
     event.preventDefault();
   };
 
+  const sections = sectionsFor(cards, dragActive);
+
   return (
     <section
       class={`column${resizing ? " column--resizing" : ""}${lanes ? " column--lanes" : ""}`}
@@ -157,33 +238,30 @@ export function Column(props: ColumnProps): JSX.Element {
             {t("board.closedWindow", { days: props.closedDays })}
           </span>
         ) : null}
+        <button
+          type="button"
+          class="icon-btn column__add"
+          aria-label={t("create.inStatus", { status: statusLabel(status.name) })}
+          title={t("create.inStatus", { status: statusLabel(status.name) })}
+          data-testid="column-add"
+          onClick={() => openCreate({ status: status.name })}
+        >
+          +
+        </button>
       </header>
       {lanes ? (
         lanes.map((lane, index) => (
-          <div
+          <LaneCell
             key={lane.key}
-            class={`lane-cell${lane.collapsed ? " lane-cell--collapsed" : ""}`}
-            style={{ gridRow: laneBodyRow(index) }}
-            data-testid="lane-cell"
-            data-lane={lane.key}
-            data-status={status.name}
-          >
-            {lane.collapsed
-              ? null
-              : sectionize(lane.cards).map((section) => (
-                  <Section
-                    key={section.priority}
-                    db={db}
-                    status={status.name}
-                    section={section}
-                    done={done}
-                    collapseKey={`${status.name}@${lane.key}`}
-                  />
-                ))}
-          </div>
+            db={db}
+            status={status}
+            lane={lane}
+            index={index}
+            dragActive={dragActive}
+          />
         ))
       ) : (
-        <div class="column__body">
+        <div ref={body} class={`column__body${bodyOver ? " column__body--over" : ""}`}>
           {sections.length === 0 ? (
             <p class="column__empty">{t("board.column.empty")}</p>
           ) : (
@@ -194,6 +272,7 @@ export function Column(props: ColumnProps): JSX.Element {
                 status={status.name}
                 section={section}
                 done={done}
+                placeholder={section.placeholder}
               />
             ))
           )}

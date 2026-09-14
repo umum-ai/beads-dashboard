@@ -7,8 +7,13 @@
  *   MOCK_BULK=1000 bun …                    # add 1000 generated issues to the first database
  *
  * Simplifications versus the real server: query forwarding is validated against a small
- * allowlist; `ready` is approximated from blocking edges; only the write proxies the UI needs
- * in stage 5 (create, patch, close, reopen, comments) are implemented.
+ * allowlist; `ready` is approximated from blocking edges; `issues:query` understands a tiny
+ * subset of the `bd query` language (`status=`, `priority<=` and friends, `type=`, `label=`,
+ * `assignee=`, joined by `AND`; anything else is `400 invalid_argument param=q`). Writes follow
+ * the real guards: `expected_version` → `precondition_failed`, close policy → `not_closable`
+ * (+ `open_children`), edges → `dependency_cycle` / `dependency_exists`, claim / release →
+ * `already_claimed` / `not_claimable` / `not_releasable`, and `issues/batch-apply` is
+ * all-or-nothing.
  */
 import type { Problem } from "../../api-client/types.ts";
 import index from "../index.html";
@@ -29,6 +34,7 @@ import {
   type FixtureDb,
   type FixtureIssue,
   nextRevision,
+  recount,
   stripRevision,
   toDetails,
   walkTree,
@@ -330,6 +336,90 @@ function listIssues(db: FixtureDb, url: URL): Response {
   return json(body);
 }
 
+const QUERY_PARAMS = new Set(["q", "all", "sort", "reverse", "limit"]);
+
+type Term = (r: FixtureIssue) => boolean;
+
+/** Tiny `bd query` subset: `field op value` terms joined by `AND`; null = syntax error. */
+function compileQuery(q: string): Term | null {
+  const parts = q.trim().split(/\s+AND\s+/i);
+  const terms: Term[] = [];
+  for (const raw of parts) {
+    const m = raw
+      .trim()
+      .match(
+        /^\(?\s*(status|priority|type|label|assignee)\s*(<=|>=|!=|=|<|>)\s*([A-Za-z0-9_.:-]+)\s*\)?$/,
+      );
+    if (!m) return null;
+    const [, field, op, value] = m as [string, string, string, string];
+    if (field === "priority") {
+      const n = Number(value);
+      if (!Number.isInteger(n)) return null;
+      terms.push((r) => {
+        switch (op) {
+          case "<=":
+            return r.priority <= n;
+          case ">=":
+            return r.priority >= n;
+          case "<":
+            return r.priority < n;
+          case ">":
+            return r.priority > n;
+          case "!=":
+            return r.priority !== n;
+          default:
+            return r.priority === n;
+        }
+      });
+      continue;
+    }
+    if (op !== "=" && op !== "!=") return null;
+    const eq = op === "=";
+    switch (field) {
+      case "status":
+        terms.push((r) => ((r.status ?? "open") === value) === eq);
+        break;
+      case "type":
+        terms.push((r) => ((r.issue_type ?? "task") === value) === eq);
+        break;
+      case "assignee":
+        terms.push((r) => ((r.assignee ?? "") === value) === eq);
+        break;
+      case "label":
+        terms.push((r) => (r.labels ?? []).includes(value) === eq);
+        break;
+      default:
+        return null;
+    }
+  }
+  return (r) => terms.every((t) => t(r));
+}
+
+function queryIssues(db: FixtureDb, url: URL): Response {
+  for (const key of url.searchParams.keys()) {
+    if (!QUERY_PARAMS.has(key)) {
+      return problem(400, "bddb_invalid_argument", `unknown query parameter ${key}`, {
+        param: key,
+        reason: "unknown_parameter",
+      });
+    }
+  }
+  const q = url.searchParams.get("q") ?? "";
+  const term = q.trim() ? compileQuery(q) : null;
+  if (!term) {
+    return problem(400, "invalid_argument", `cannot parse query expression: ${q}`, {
+      param: "q",
+      reason: "invalid_value",
+    });
+  }
+  const limitRaw = url.searchParams.get("limit");
+  const limit = limitRaw === null ? 50 : Number(limitRaw);
+  const rows = [...db.issues.values()].filter(term);
+  rows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+  const items = (limit > 0 ? rows.slice(0, limit) : rows).map((r) => stripRevision(r));
+  return json({ items, has_more: limit > 0 && rows.length > limit });
+}
+
 const TREE_PARAMS = new Set(["root_id", "direction", "max_depth", "status"]);
 
 /** `GET dependencies/tree`: flat DFS `TreeNode`s (issue fields + depth/parent_id/edge). */
@@ -433,10 +523,181 @@ function guard(r: FixtureIssue, body: Record<string, unknown>): Response | null 
   if (expected !== undefined && expected !== r.revision) {
     return problem(409, "precondition_failed", "revision mismatch", {
       expected_version: expected,
-      revision: r.revision,
+      param: "expected_version",
     });
   }
   return null;
+}
+
+class WriteError extends Error {
+  constructor(readonly response: Response) {
+    super("write refused");
+  }
+}
+
+const BLOCKING_TYPES = new Set(["blocks", "conditional-blocks", "waits-for", "parent-child"]);
+
+/** Would an edge `issue → dependsOn` close a cycle? (Is `issue` reachable from `dependsOn`?) */
+function wouldCycle(db: FixtureDb, issue: string, dependsOn: string): boolean {
+  if (issue === dependsOn) return true;
+  const seen = new Set<string>();
+  const stack = [dependsOn];
+  while (stack.length) {
+    const id = stack.pop() as string;
+    if (id === issue) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const d of db.dependencies) if (d.issue_id === id) stack.push(d.depends_on_id);
+  }
+  return false;
+}
+
+/** Close policy: open children → `open_children`, else a live blocking edge → plain refusal. */
+function closePolicy(db: FixtureDb, r: FixtureIssue): Response | null {
+  const openChildren = [...db.issues.values()].filter(
+    (c) => c.parent === r.id && !isDone(db, c.status ?? "open"),
+  ).length;
+  if (openChildren > 0) {
+    return problem(
+      409,
+      "not_closable",
+      `issue has ${openChildren} open children; close them first or close with force`,
+      {
+        open_children: openChildren,
+      },
+    );
+  }
+  const blocker = db.dependencies.find((d) => {
+    if (d.issue_id !== r.id || d.type === "parent-child" || !BLOCKING_TYPES.has(d.type))
+      return false;
+    const target = db.issues.get(d.depends_on_id);
+    return target ? !isDone(db, target.status ?? "open") : false;
+  });
+  if (blocker) {
+    return problem(
+      409,
+      "not_closable",
+      `issue is blocked by open dependency ${blocker.depends_on_id}`,
+      {
+        blocker_id: blocker.depends_on_id,
+      },
+    );
+  }
+  return null;
+}
+
+function setParent(db: FixtureDb, r: FixtureIssue, parentId: string, touched: string[]): void {
+  if (parentId) {
+    const parent = db.issues.get(parentId);
+    if (!parent) throw new WriteError(problem(404, "not_found", `parent ${parentId} not found`));
+    if (wouldCycle(db, r.id, parentId)) {
+      throw new WriteError(
+        problem(409, "dependency_cycle", `${parentId} is a descendant of ${r.id}`, {
+          issue_id: r.id,
+          blocker_id: parentId,
+        }),
+      );
+    }
+    const other = db.dependencies.find(
+      (d) => d.issue_id === r.id && d.depends_on_id === parentId && d.type !== "parent-child",
+    );
+    if (other) {
+      throw new WriteError(
+        problem(
+          409,
+          "dependency_exists",
+          `edge ${r.id} → ${parentId} exists with type ${other.type}`,
+          {
+            existing_type: other.type,
+            requested_type: "parent-child",
+          },
+        ),
+      );
+    }
+  }
+  if (r.parent) touched.push(r.parent);
+  db.dependencies = db.dependencies.filter(
+    (d) => !(d.issue_id === r.id && d.type === "parent-child"),
+  );
+  if (parentId) {
+    r.parent = parentId;
+    touched.push(parentId);
+    db.dependencies.push({
+      issue_id: r.id,
+      depends_on_id: parentId,
+      type: "parent-child",
+      created_at: new Date().toISOString(),
+    });
+  } else delete r.parent;
+}
+
+/** Apply an `IssuePatchBody` (or the batch `ApplyPatchBody`) to a row; returns touched ids. */
+function applyPatch(
+  db: FixtureDb,
+  r: FixtureIssue,
+  patch: Record<string, unknown>,
+  forceClose: boolean,
+): { changed: boolean; touched: string[] } {
+  if (Object.keys(patch).length === 0) {
+    throw new WriteError(
+      problem(400, "invalid_argument", "patch must not be empty", { param: "patch" }),
+    );
+  }
+  const before = JSON.stringify(r);
+  const touched = [r.id];
+  if (typeof patch.title === "string") r.title = patch.title;
+  for (const key of ["description", "design", "acceptance_criteria", "notes"] as const) {
+    if (typeof patch[key] === "string") r[key] = patch[key] as string;
+  }
+  if (typeof patch.append_notes === "string") {
+    r.notes = r.notes ? `${r.notes}\n${patch.append_notes}` : patch.append_notes;
+  }
+  if (typeof patch.priority === "number") r.priority = patch.priority;
+  if (typeof patch.issue_type === "string") r.issue_type = patch.issue_type;
+  if (typeof patch.status === "string" && patch.status !== (r.status ?? "open")) {
+    const wasDone = isDone(db, r.status ?? "open");
+    if (isDone(db, patch.status) && !wasDone && !forceClose) {
+      const refused = closePolicy(db, r);
+      if (refused) throw new WriteError(refused);
+    }
+    r.status = patch.status;
+    if (isDone(db, patch.status)) r.closed_at = new Date().toISOString();
+    else {
+      delete r.closed_at;
+      delete r.close_reason;
+    }
+    if (r.parent) touched.push(r.parent);
+  }
+  if (typeof patch.assignee === "string") {
+    if (patch.assignee) r.assignee = patch.assignee;
+    else delete r.assignee;
+  }
+  if (Array.isArray(patch.labels)) r.labels = patch.labels as string[];
+  else if (patch.labels && typeof patch.labels === "object") {
+    // batch-apply `ApplyLabelPatch`
+    const lp = patch.labels as { replace?: string[]; add?: string[]; remove?: string[] };
+    if (lp.replace) r.labels = [...lp.replace];
+    if (lp.add) r.labels = [...new Set([...(r.labels ?? []), ...lp.add])];
+    if (lp.remove) r.labels = (r.labels ?? []).filter((l) => !(lp.remove as string[]).includes(l));
+  }
+  if (Array.isArray(patch.add_labels))
+    r.labels = [...new Set([...(r.labels ?? []), ...(patch.add_labels as string[])])];
+  if (Array.isArray(patch.remove_labels))
+    r.labels = (r.labels ?? []).filter((l) => !(patch.remove_labels as string[]).includes(l));
+  if (typeof patch.parent_id === "string") setParent(db, r, patch.parent_id, touched);
+  for (const key of ["estimated_minutes", "external_ref", "due_at", "defer_until"] as const) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (value === null) delete r[key];
+    else if (key === "estimated_minutes" && typeof value === "number") r.estimated_minutes = value;
+    else if (key !== "estimated_minutes" && typeof value === "string") r[key] = value;
+  }
+  const changed = before !== JSON.stringify(r);
+  if (changed) {
+    r.updated_at = new Date().toISOString();
+    r.revision = nextRevision();
+  }
+  return { changed, touched };
 }
 
 async function patchIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promise<Response> {
@@ -445,72 +706,43 @@ async function patchIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promise
   const conflict = guard(r, body);
   if (conflict) return conflict;
   const patch = (body.patch ?? {}) as Record<string, unknown>;
-  const before = { ...r };
-  const touched = [r.id];
-  if (typeof patch.title === "string") r.title = patch.title;
-  for (const key of ["description", "design", "acceptance_criteria", "notes"] as const) {
-    if (typeof patch[key] === "string") r[key] = patch[key] as string;
+  const snapshotState = { row: { ...r }, deps: [...db.dependencies] };
+  try {
+    const { changed, touched } = applyPatch(db, r, patch, body.force_close_policy === true);
+    if (changed) {
+      recount(db.issues, db.dependencies);
+      emitDelta(db, [...new Set(touched)]);
+    }
+    return json({ issue: stripRevision(r), changed, revision: r.revision });
+  } catch (err) {
+    if (err instanceof WriteError) {
+      Object.assign(r, snapshotState.row);
+      for (const key of Object.keys(r))
+        if (!(key in snapshotState.row)) delete (r as unknown as Record<string, unknown>)[key];
+      db.dependencies = snapshotState.deps;
+      return err.response;
+    }
+    throw err;
   }
-  if (typeof patch.append_notes === "string") r.notes = `${r.notes ?? ""}\n${patch.append_notes}`;
-  if (typeof patch.priority === "number") r.priority = patch.priority;
-  if (typeof patch.issue_type === "string") r.issue_type = patch.issue_type;
-  if (typeof patch.status === "string") {
-    r.status = patch.status;
-    if (patch.status === "closed") r.closed_at = new Date().toISOString();
-    else delete r.closed_at;
-  }
-  if (typeof patch.assignee === "string") {
-    if (patch.assignee) r.assignee = patch.assignee;
-    else delete r.assignee;
-  }
-  if (Array.isArray(patch.labels)) r.labels = patch.labels as string[];
-  if (Array.isArray(patch.add_labels))
-    r.labels = [...new Set([...(r.labels ?? []), ...(patch.add_labels as string[])])];
-  if (Array.isArray(patch.remove_labels))
-    r.labels = (r.labels ?? []).filter((l) => !(patch.remove_labels as string[]).includes(l));
-  if (typeof patch.parent_id === "string") {
-    if (r.parent) touched.push(r.parent);
-    db.dependencies = db.dependencies.filter(
-      (d) => !(d.issue_id === r.id && d.type === "parent-child"),
-    );
-    if (patch.parent_id) {
-      r.parent = patch.parent_id;
-      touched.push(patch.parent_id);
-      db.dependencies.push({
-        issue_id: r.id,
-        depends_on_id: patch.parent_id,
-        type: "parent-child",
-        created_at: new Date().toISOString(),
-      });
-    } else delete r.parent;
-  }
-  const changed = JSON.stringify(before) !== JSON.stringify(r);
-  if (changed) {
-    r.updated_at = new Date().toISOString();
-    r.revision = nextRevision();
-    emitDelta(db, touched);
-  }
-  return json({ issue: stripRevision(r), changed, revision: r.revision });
 }
 
 async function closeIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promise<Response> {
   const body = (await readBody(req)) ?? {};
   const conflict = guard(r, body);
   if (conflict) return conflict;
-  const alreadyClosed = r.status === "closed";
+  const alreadyClosed = isDone(db, r.status ?? "open");
   const openChildren = [...db.issues.values()].filter(
-    (c) => c.parent === r.id && c.status !== "closed",
+    (c) => c.parent === r.id && !isDone(db, c.status ?? "open"),
   ).length;
-  if (!alreadyClosed && openChildren > 0 && body.force !== true) {
-    return problem(409, "not_closable", `${openChildren} open children`, {
-      open_children: openChildren,
-    });
+  if (!alreadyClosed && body.force !== true) {
+    const refused = closePolicy(db, r);
+    if (refused) return refused;
   }
   if (!alreadyClosed) {
     r.status = "closed";
     r.closed_at = new Date().toISOString();
     r.updated_at = r.closed_at;
-    if (typeof body.reason === "string") r.close_reason = body.reason;
+    if (typeof body.reason === "string" && body.reason) r.close_reason = body.reason;
     r.revision = nextRevision();
     emitDelta(db, [r.id, ...(r.parent ? [r.parent] : [])]);
   }
@@ -526,7 +758,7 @@ async function reopenIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promis
   const body = (await readBody(req)) ?? {};
   const conflict = guard(r, body);
   if (conflict) return conflict;
-  const alreadyOpen = r.status !== "closed";
+  const alreadyOpen = !isDone(db, r.status ?? "open");
   if (!alreadyOpen) {
     r.status = "open";
     delete r.closed_at;
@@ -536,6 +768,45 @@ async function reopenIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promis
     emitDelta(db, [r.id, ...(r.parent ? [r.parent] : [])]);
   }
   return json({ issue: stripRevision(r), already_open: alreadyOpen, revision: r.revision });
+}
+
+async function claimIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promise<Response> {
+  const body = (await readBody(req)) ?? {};
+  const who = typeof body.actor === "string" && body.actor ? body.actor : ACTOR_DEFAULT;
+  const status = r.status ?? "open";
+  if (isDone(db, status) || isFrozen(db, status)) {
+    return problem(409, "not_claimable", `issue is ${status}`, { issue_status: status });
+  }
+  if (r.assignee && r.assignee !== who) {
+    return problem(409, "already_claimed", `claimed by ${r.assignee}`, { assignee: r.assignee });
+  }
+  const already = r.assignee === who && status === "in_progress";
+  if (!already) {
+    r.assignee = who;
+    r.status = "in_progress";
+    r.started_at = r.started_at ?? new Date().toISOString();
+    r.updated_at = new Date().toISOString();
+    r.revision = nextRevision();
+    emitDelta(db, [r.id]);
+  }
+  return json({ issue: stripRevision(r), already_claimed: already });
+}
+
+async function releaseIssue(db: FixtureDb, r: FixtureIssue, req: Request): Promise<Response> {
+  const body = (await readBody(req)) ?? {};
+  const who = typeof body.actor === "string" && body.actor ? body.actor : ACTOR_DEFAULT;
+  if (!r.assignee) return problem(409, "not_releasable", "issue is not claimed");
+  if (r.assignee !== who && body.force !== true) {
+    return problem(409, "not_releasable", `claimed by ${r.assignee}, not ${who}`, {
+      assignee: r.assignee,
+    });
+  }
+  delete r.assignee;
+  if (r.status === "in_progress") r.status = "open";
+  r.updated_at = new Date().toISOString();
+  r.revision = nextRevision();
+  emitDelta(db, [r.id]);
+  return json({ issue: stripRevision(r), released: true });
 }
 
 async function addComment(db: FixtureDb, r: FixtureIssue, req: Request): Promise<Response> {
@@ -557,6 +828,255 @@ async function addComment(db: FixtureDb, r: FixtureIssue, req: Request): Promise
   r.updated_at = comment.created_at;
   emitDelta(db, [r.id]);
   return json(comment, 201);
+}
+
+interface EdgeBody {
+  issue_id: string;
+  depends_on_id: string;
+  type: string;
+}
+
+function addEdge(db: FixtureDb, edge: EdgeBody, touched: string[]): void {
+  const source = db.issues.get(edge.issue_id);
+  if (!source) {
+    throw new WriteError(
+      problem(400, "invalid_argument", `unknown source ${edge.issue_id}`, { param: "issue_id" }),
+    );
+  }
+  if (edge.issue_id === edge.depends_on_id) {
+    throw new WriteError(
+      problem(400, "invalid_argument", "an issue cannot depend on itself", {
+        param: "depends_on_id",
+      }),
+    );
+  }
+  if (edge.type === "parent-child") {
+    setParent(db, source, edge.depends_on_id, touched);
+    source.revision = nextRevision();
+    return;
+  }
+  const existing = db.dependencies.find(
+    (d) => d.issue_id === edge.issue_id && d.depends_on_id === edge.depends_on_id,
+  );
+  if (existing && existing.type !== edge.type) {
+    throw new WriteError(
+      problem(409, "dependency_exists", `edge exists with type ${existing.type}`, {
+        existing_type: existing.type,
+        requested_type: edge.type,
+      }),
+    );
+  }
+  if (existing) return;
+  if (BLOCKING_TYPES.has(edge.type) && wouldCycle(db, edge.issue_id, edge.depends_on_id)) {
+    throw new WriteError(
+      problem(
+        409,
+        "dependency_cycle",
+        `${edge.issue_id} → ${edge.depends_on_id} would form a cycle`,
+        {
+          issue_id: edge.issue_id,
+          blocker_id: edge.depends_on_id,
+        },
+      ),
+    );
+  }
+  db.dependencies.push({ ...edge, created_at: new Date().toISOString() });
+  touched.push(edge.issue_id, edge.depends_on_id);
+  source.updated_at = new Date().toISOString();
+  source.revision = nextRevision();
+}
+
+async function dependenciesAdd(db: FixtureDb, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  const edges = body?.edges;
+  if (!Array.isArray(edges) || edges.length === 0) {
+    return problem(400, "invalid_argument", "edges must be a non-empty array", { param: "edges" });
+  }
+  const before = {
+    deps: [...db.dependencies],
+    rows: new Map([...db.issues].map(([k, v]) => [k, { ...v }])),
+  };
+  const touched: string[] = [];
+  try {
+    for (const raw of edges as unknown[]) {
+      const e = raw as Partial<EdgeBody>;
+      if (
+        typeof e.issue_id !== "string" ||
+        typeof e.depends_on_id !== "string" ||
+        typeof e.type !== "string"
+      ) {
+        throw new WriteError(
+          problem(400, "invalid_argument", "edge needs issue_id, depends_on_id, type", {
+            param: "edges",
+          }),
+        );
+      }
+      addEdge(db, e as EdgeBody, touched);
+    }
+  } catch (err) {
+    if (!(err instanceof WriteError)) throw err;
+    db.dependencies = before.deps;
+    for (const [k, v] of before.rows) db.issues.set(k, v);
+    return err.response;
+  }
+  recount(db.issues, db.dependencies);
+  emitDelta(db, [...new Set(touched)]);
+  return json({ added: edges });
+}
+
+async function dependenciesRemove(db: FixtureDb, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (!body || typeof body.issue_id !== "string" || typeof body.depends_on_id !== "string") {
+    return problem(400, "invalid_argument", "issue_id and depends_on_id are required");
+  }
+  const n = db.dependencies.length;
+  db.dependencies = db.dependencies.filter(
+    (d) => !(d.issue_id === body.issue_id && d.depends_on_id === body.depends_on_id),
+  );
+  const removed = db.dependencies.length !== n;
+  if (removed) {
+    const source = db.issues.get(body.issue_id);
+    if (source?.parent === body.depends_on_id) delete source.parent;
+    if (source) {
+      source.updated_at = new Date().toISOString();
+      source.revision = nextRevision();
+    }
+    recount(db.issues, db.dependencies);
+    emitDelta(db, [body.issue_id, body.depends_on_id]);
+  }
+  return json({ removed });
+}
+
+/** `issues:batchApply`: ordered items, all-or-nothing (state is restored on the first refusal). */
+async function batchApply(db: FixtureDb, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  const items = body?.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    return problem(400, "invalid_argument", "items must be a non-empty array", { param: "items" });
+  }
+  const before = {
+    deps: [...db.dependencies],
+    rows: new Map([...db.issues].map(([k, v]) => [k, { ...v }])),
+    ids: new Set(db.issues.keys()),
+  };
+  const touched: string[] = [];
+  const keys: Record<string, string> = {};
+  const resolve = (ref: { id?: string; key?: string } | undefined): FixtureIssue => {
+    const id = ref?.id ?? (ref?.key ? keys[ref.key] : undefined);
+    const r = id ? db.issues.get(id) : undefined;
+    if (!r)
+      throw new WriteError(problem(404, "not_found", `no issue for ref ${JSON.stringify(ref)}`));
+    return r;
+  };
+  try {
+    for (const [index, raw] of (items as Record<string, unknown>[]).entries()) {
+      const item = raw as {
+        kind?: string;
+        update?: Record<string, unknown>;
+        close?: Record<string, unknown>;
+        create?: Record<string, unknown>;
+        dep_add?: Record<string, unknown>;
+      };
+      switch (item.kind) {
+        case "update": {
+          const u = item.update ?? {};
+          const r = resolve(u.target as { id?: string; key?: string });
+          const conflict = guard(r, u);
+          if (conflict) throw new WriteError(conflict);
+          const { touched: t } = applyPatch(
+            db,
+            r,
+            (u.patch ?? {}) as Record<string, unknown>,
+            u.force_close_policy === true,
+          );
+          touched.push(...t);
+          break;
+        }
+        case "close": {
+          const c = item.close ?? {};
+          const r = resolve(c.target as { id?: string; key?: string });
+          const conflict = guard(r, c);
+          if (conflict) throw new WriteError(conflict);
+          if (!isDone(db, r.status ?? "open")) {
+            if (c.force !== true) {
+              const refused = closePolicy(db, r);
+              if (refused) throw new WriteError(refused);
+            }
+            r.status = "closed";
+            r.closed_at = new Date().toISOString();
+            r.updated_at = r.closed_at;
+            if (typeof c.reason === "string" && c.reason) r.close_reason = c.reason;
+            r.revision = nextRevision();
+            touched.push(r.id, ...(r.parent ? [r.parent] : []));
+          }
+          break;
+        }
+        case "create": {
+          const c = item.create ?? {};
+          if (typeof c.title !== "string" || !c.title.trim()) {
+            throw new WriteError(
+              problem(400, "invalid_argument", `items[${index}].create.title is required`, {
+                item_index: index,
+                item_kind: "create",
+              }),
+            );
+          }
+          const now = new Date().toISOString();
+          const r: FixtureIssue = {
+            id: typeof c.id === "string" && c.id ? c.id : newId(db),
+            title: c.title,
+            issue_type: typeof c.issue_type === "string" ? c.issue_type : "task",
+            status: typeof c.status === "string" ? c.status : "open",
+            priority: typeof c.priority === "number" ? c.priority : 2,
+            created_at: now,
+            updated_at: now,
+            created_by: typeof body?.actor === "string" ? body.actor : ACTOR_DEFAULT,
+            labels: Array.isArray(c.labels) ? (c.labels as string[]) : [],
+            dependency_count: 0,
+            dependent_count: 0,
+            comment_count: 0,
+            revision: nextRevision(),
+          };
+          if (db.issues.has(r.id))
+            throw new WriteError(problem(409, "already_exists", `${r.id} exists`));
+          db.issues.set(r.id, r);
+          if (typeof c.key === "string") keys[c.key] = r.id;
+          touched.push(r.id);
+          break;
+        }
+        case "dep_add": {
+          const d = item.dep_add ?? {};
+          const source = resolve(d.issue as { id?: string; key?: string });
+          const target = resolve(d.depends_on as { id?: string; key?: string });
+          addEdge(
+            db,
+            {
+              issue_id: source.id,
+              depends_on_id: target.id,
+              type: typeof d.type === "string" ? d.type : "blocks",
+            },
+            touched,
+          );
+          break;
+        }
+        default:
+          throw new WriteError(
+            problem(400, "invalid_argument", `items[${index}].kind is unknown`, {
+              item_index: index,
+            }),
+          );
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof WriteError)) throw err;
+    db.dependencies = before.deps;
+    for (const id of [...db.issues.keys()]) if (!before.ids.has(id)) db.issues.delete(id);
+    for (const [k, v] of before.rows) db.issues.set(k, v);
+    return err.response;
+  }
+  recount(db.issues, db.dependencies);
+  emitDelta(db, [...new Set(touched)]);
+  return json({ applied: items.length, keys });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -604,7 +1124,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (req.method === "GET") return listIssues(db, url);
     if (req.method === "POST") return createIssue(db, req);
   }
+  if (rest === "/issues:query" && req.method === "GET") return queryIssues(db, url);
+  if (rest === "/issues/batch-apply" && req.method === "POST") return batchApply(db, req);
   if (rest === "/dependencies/tree" && req.method === "GET") return dependencyTree(db, url);
+  if (rest === "/dependencies/add" && req.method === "POST") return dependenciesAdd(db, req);
+  if (rest === "/dependencies/remove" && req.method === "POST") return dependenciesRemove(db, req);
   const im = rest.match(/^\/issues\/([^/]+)(\/(close|reopen|comments|claim|release))?$/);
   if (im) {
     const id = decodeURIComponent(im[1] as string);
@@ -616,6 +1140,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (action === "close" && req.method === "POST") return closeIssue(db, r, req);
     if (action === "reopen" && req.method === "POST") return reopenIssue(db, r, req);
     if (action === "comments" && req.method === "POST") return addComment(db, r, req);
+    if (action === "claim" && req.method === "POST") return claimIssue(db, r, req);
+    if (action === "release" && req.method === "POST") return releaseIssue(db, r, req);
   }
   return problem(404, "not_found", `no route ${req.method} ${path}`);
 }

@@ -4,16 +4,20 @@
  */
 import { useComputed } from "@preact/signals";
 import type { JSX } from "preact";
+import { useEffect } from "preact/hooks";
 import { Breadcrumbs, type Crumb } from "../components/Breadcrumbs.tsx";
 import { Column } from "../components/Column.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
+import { QueryBar, QueryToggle } from "../components/QueryBar.tsx";
 import { GroupToggle, ProgressBar, SwimlaneBoard } from "../components/Swimlane.tsx";
 import { Toolbar } from "../components/Toolbar.tsx";
 import { t } from "../i18n/index.ts";
 import { loadAllClosed } from "../lib/api.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
 import { doneStatuses, groupByStatus } from "../lib/board.ts";
+import { useBoardDnd } from "../lib/dnd.ts";
 import { isFilterEmpty, matchesFilters } from "../lib/filters.ts";
+import type { Lane as DropLaneOf } from "../lib/hierarchy.ts";
 import {
   ancestorsOf,
   groupBySubEpic,
@@ -23,9 +27,12 @@ import {
   progressOf,
 } from "../lib/hierarchy.ts";
 import { isRetryable, refetchSnapshot } from "../lib/live.ts";
+import { openCreate } from "../state/create.ts";
 import { databases, meta } from "../state/meta.ts";
 import { groupByEpic, setGroupByEpic } from "../state/prefs.ts";
+import { queryIssues, queryLoading, queryResult } from "../state/query.ts";
 import { filters, hrefFor, onLinkClick, updateFilters } from "../state/route.ts";
+import { clearSelection, selection } from "../state/selection.ts";
 import {
   allIssues,
   board,
@@ -61,10 +68,23 @@ export function BoardView({ db }: { db: string }): JSX.Element {
   const info = dbInfo.value ?? databases.value.find((d) => d.name === db) ?? null;
   const state = board.value;
   const hasData = boardDb.value === db && state.seq >= 0;
+  useBoardDnd(db);
 
+  // Escape clears the multi-selection (the drawer handles its own Escape first).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && selection.value.size && !event.defaultPrevented)
+        clearSelection();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Query mode replaces the issue set with the `issues:query` result (live rows where present).
+  const source = useComputed(() => queryIssues.value ?? allIssues.value);
   const visible = useComputed(() => {
     const f = filters.value;
-    const rows = allIssues.value;
+    const rows = source.value;
     return isFilterEmpty(f) ? rows : rows.filter((row) => matchesFilters(row, f));
   });
   const assignees = useComputed(() => {
@@ -111,7 +131,8 @@ export function BoardView({ db }: { db: string }): JSX.Element {
   }
 
   const closedDays = meta.value?.closedDays ?? 7;
-  const total = allIssues.value.length;
+  const inQuery = queryResult.value !== null;
+  const total = source.value.length;
   const filtered = !isFilterEmpty(filters.value);
   const index = hierarchy.value;
   const epicId = filters.value.epic;
@@ -125,7 +146,8 @@ export function BoardView({ db }: { db: string }): JSX.Element {
   const inScope = (row: BoardIssue) =>
     !epicId || (row.id !== epicId && isUnder(index, row.id, epicId));
   const scoped = visible.value.filter(inScope);
-  const scopeTotal = epicId ? allIssues.value.filter(inScope).length : total;
+  const scopeTotal = epicId ? source.value.filter(inScope).length : total;
+  const parentIdOf = (lane: DropLaneOf) => lane.epic?.id ?? (epicId || "");
   const lanes: Lane[] | null = !grouped
     ? null
     : epicId
@@ -173,8 +195,30 @@ export function BoardView({ db }: { db: string }): JSX.Element {
         assignees={assignees.value}
         shown={scoped.length}
         total={scopeTotal}
-        extra={<GroupToggle on={grouped} onChange={setGroupByEpic} />}
+        extra={
+          <>
+            <GroupToggle on={grouped} onChange={setGroupByEpic} />
+            <QueryToggle />
+            <button
+              type="button"
+              class="btn btn--primary"
+              data-testid="new-issue"
+              onClick={() => openCreate(epicId ? { parent: epicId } : {})}
+            >
+              {t("create.new")}
+            </button>
+          </>
+        }
       />
+      <QueryBar />
+      {selection.value.size > 1 ? (
+        <div class="selbar" data-testid="selection-bar">
+          {t("board.selected", { count: selection.value.size })}
+          <button type="button" class="btn btn--ghost" onClick={clearSelection}>
+            {t("board.selected.clear")}
+          </button>
+        </div>
+      ) : null}
       {crumbs ? (
         <div class="drill" data-testid="drill">
           <Breadcrumbs items={crumbs} label={t("board.crumbs.label")} testId="breadcrumbs" />
@@ -192,7 +236,13 @@ export function BoardView({ db }: { db: string }): JSX.Element {
           ) : null}
         </div>
       ) : null}
-      {total === 0 ? (
+      {inQuery && total === 0 ? (
+        <EmptyState
+          title={t("board.empty.title")}
+          body={queryLoading.value ? t("query.running") : t("query.empty")}
+          testId="query-empty"
+        />
+      ) : total === 0 ? (
         <EmptyState title={t("board.empty.title")} body={t("board.empty.none")} />
       ) : epicId && scoped.length === 0 ? (
         <EmptyState
@@ -211,6 +261,7 @@ export function BoardView({ db }: { db: string }): JSX.Element {
           fallbackLabel={epicId ? t("board.lane.direct", { id: epicId }) : t("board.lane.noEpic")}
           onOpenEpic={openEpic}
           columnExtras={columnExtras}
+          parentIdOf={parentIdOf}
         />
       ) : (
         <div class="board" data-testid="board">

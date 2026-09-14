@@ -7,11 +7,13 @@
 #   scripts/stand.sh down   [--dir DIR] [--purge]
 #   scripts/stand.sh seed   [--dir DIR]
 #   scripts/stand.sh create-issue TITLE [--dir DIR] [--type T] [--priority N]   # prints the new id
+#   scripts/stand.sh show-issue ID [--dir DIR]                                  # `bd show ID --json`
 #   scripts/stand.sh status [--dir DIR]
 #   scripts/stand.sh --help
 #
 # Env: STAND_DIR (default DIR), BDDB_BD_PATH (bd binary, default `bd`),
-#      STAND_DOLT_PORT / STAND_BD_PORT / STAND_PREFIX / STAND_DATABASE (defaults for the flags).
+#      STAND_DOLT_PORT / STAND_BD_PORT / STAND_PREFIX / STAND_DATABASE (defaults for the flags),
+#      STAND_DOLT_BIND (dolt listen address, default 127.0.0.1; 0.0.0.0 lets a container reach it).
 # All BEADS_* / BD_* variables of the caller are ignored (the stand must never reach a real store).
 # Never touches any dolt/bd process it did not start itself (pid files in DIR).
 set -euo pipefail
@@ -27,17 +29,19 @@ DOLT="${BDDB_DOLT_PATH:-dolt}"
 
 DIR="${STAND_DIR:-.stand}"
 DOLT_PORT="${STAND_DOLT_PORT:-3399}"
+DOLT_BIND="${STAND_DOLT_BIND:-127.0.0.1}"
 BD_PORT="${STAND_BD_PORT:-47313}"
 PREFIX="${STAND_PREFIX:-kb}"
 DATABASE="${STAND_DATABASE:-}"
 PURGE=0
 CMD=""
 TITLE=""
+ISSUE_ID=""
 ISSUE_TYPE="task"
 PRIORITY="2"
 
 usage() {
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 log() { printf 'stand: %s\n' "$*" >&2; }
@@ -48,6 +52,7 @@ die() { log "error: $*"; exit 1; }
 case "$1" in
   up|down|seed|status) CMD="$1"; shift ;;
   create-issue) CMD="$1"; shift; [[ $# -gt 0 && "$1" != -* ]] && { TITLE="$1"; shift; } ;;
+  show-issue) CMD="$1"; shift; [[ $# -gt 0 && "$1" != -* ]] && { ISSUE_ID="$1"; shift; } ;;
   -h|--help|help) usage; exit 0 ;;
   *) die "unknown command '$1' (see --help)" ;;
 esac
@@ -156,11 +161,18 @@ cmd_up() {
   else
     rm -f "$DOLT_PID"
     port_open "$DOLT_PORT" && die "port $DOLT_PORT is already in use by a process we did not start; pick --dolt-port"
-    log "starting dolt sql-server on 127.0.0.1:$DOLT_PORT (data: $DOLT_DATA)"
-    nohup "$DOLT" sql-server --host 127.0.0.1 --port "$DOLT_PORT" --data-dir "$DOLT_DATA" \
+    log "starting dolt sql-server on $DOLT_BIND:$DOLT_PORT (data: $DOLT_DATA)"
+    nohup "$DOLT" sql-server --host "$DOLT_BIND" --port "$DOLT_PORT" --data-dir "$DOLT_DATA" \
       >"$DOLT_LOG" 2>&1 </dev/null &
     echo $! >"$DOLT_PID"
     wait_port "$DOLT_PORT" 30 || { tail -20 "$DOLT_LOG" >&2; die "dolt did not open port $DOLT_PORT"; }
+    if [[ "$DOLT_BIND" != "127.0.0.1" && "$DOLT_BIND" != "localhost" ]]; then
+      # A fresh dolt only has root@localhost; remote clients (a container) need root@%.
+      log "creating dolt user root@% for remote connections"
+      "$DOLT" --host 127.0.0.1 --port "$DOLT_PORT" --user root --password "" --no-tls sql \
+        -q "CREATE USER IF NOT EXISTS 'root'@'%'; GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;" \
+        >>"$DOLT_LOG" 2>&1 </dev/null || { tail -5 "$DOLT_LOG" >&2; die "could not create root@% on dolt"; }
+    fi
   fi
 
   # 2. workspace
@@ -263,10 +275,19 @@ cmd_create_issue() {
   "$BD" -C "$WS_DIR" --actor stand-cli q --type "$ISSUE_TYPE" --priority "$PRIORITY" "$TITLE"
 }
 
+# Read one issue back through the CLI (independent of the dashboard): the stage-5 acceptance
+# checks that a drop into Closed really closed the row with its reason.
+cmd_show_issue() {
+  [[ -f "$WS_DIR/.beads/metadata.json" ]] || die "workspace not initialised; run 'up' first"
+  [[ -n "$ISSUE_ID" ]] || die "show-issue needs an ID"
+  "$BD" -C "$WS_DIR" show "$ISSUE_ID" --json
+}
+
 case "$CMD" in
   up) cmd_up ;;
   down) cmd_down ;;
   seed) cmd_seed ;;
   status) cmd_status ;;
   create-issue) cmd_create_issue ;;
+  show-issue) cmd_show_issue ;;
 esac

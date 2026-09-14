@@ -28,11 +28,17 @@ mise run contract       # bun test tests/contract (needs bd + dolt)
 mise run e2e            # Playwright (stage 3+)
 mise run dev            # scripts/dev.sh: stand up if needed, then bun --hot src/server/main.ts against it
 mise run doctor         # bddb doctor against the local stand (dolt 3399)
-mise run docker:build   # docker build -t bddb .
+mise run build          # dist/web (SPA, relative asset URLs) + dist/server (self-contained bundle)
+mise run build:binary   # dist/bddb-<os>-<arch>; --target bun-linux-x64|bun-linux-arm64|bun-darwin-x64|bun-darwin-arm64
+mise run check:pins     # beads version agrees in mise.toml, Dockerfile, version.ts, ci.yml
+mise run docker:lint    # hadolint Dockerfile
+mise run docker:build   # docker build with BEADS_VERSION from mise.toml
+mise run docker:smoke   # build the image and run it against a scratch stand (scripts/docker-smoke.sh)
 ```
 
-Acceptance for any change: `mise run lint && mise run typecheck && mise run test` pass.
-Workflow files must pass `actionlint`, Dockerfiles `hadolint`.
+Acceptance for any change: `mise run lint && mise run typecheck && mise run test && mise run
+build` pass. Workflow files must pass `actionlint`, the Dockerfile `hadolint`, shell scripts
+`shellcheck`; `scripts/check-pins.sh` must stay green.
 
 ### Running the server against the stand
 
@@ -68,9 +74,13 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 | `spec/openapi.v0.yaml` | Pinned copy of the `bd serve` OpenAPI spec for the supported beads version. Source of truth for the contract; never hand-edit |
 | `tests/unit/` | `bun test` unit tests |
 | `tests/contract/` | Tests against a real `bd serve` + `dolt sql-server` |
-| `docker/` | Dockerfile and compose example (stage 6) |
-| `docs/` | topology, configuration, compatibility, host-setup |
-| `.github/workflows/` | `ci.yml`, later `docker.yml`, `release.yml` |
+| `Dockerfile`, `.dockerignore`, `docker/bddb` | Multi-stage image (bd download + checksum, bun build, `oven/bun:1.4-slim` runtime); `docker/bddb` is the entry-point wrapper |
+| `docker-compose.example.yml` | Compose example with the commented env block |
+| `scripts/` | `stand.sh` (scratch dolt + bd serve), `dev.sh`, `gen-api.sh`, `build-web.sh`, `build-server.sh`, `build-binary.sh`, `check-pins.sh`, `docker-smoke.sh` |
+| `dist/` | Build output (git-ignored): `web/`, `server/`, `bddb-<os>-<arch>` |
+| `docs/` | topology, configuration, bff-api, api-client, ui, host-setup, deployment, compatibility |
+| `.github/workflows/` | `ci.yml` (lint, typecheck, unit, build, pins, contract matrix, hadolint + image build), `docker.yml` (GHCR, amd64+arm64), `release.yml` (release-please, binaries) |
+| `release-please-config.json`, `.release-please-manifest.json` | release-please (node type, tags `vX.Y.Z`, first release 0.1.0) |
 
 ## Conventions
 
@@ -90,8 +100,52 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
   and fix the document.
 - Do not commit `tmp/`. Do not commit secrets. Keep `bun.lock` in sync (`bun install`).
 
+## Build and release
+
+- **SPA**: `scripts/build-web.sh` → `bun build src/web/index.html --outdir dist/web --production
+  --public-path ./`. Relative asset URLs on purpose: `src/server/static.ts` serves any pre-built
+  or embedded SPA in *files mode* — rewrites asset URLs to `./<file>` and injects
+  `<base href="<BDDB_BASE_PATH>/">` (`/` at the root), so one build works under every prefix.
+  Bun HTML routes (root-absolute asset URLs, HMR) are used only when running from source at the
+  root. The SPA must never use document-relative URLs (`href="#x"`), they break under `<base>`.
+- **Server**: `scripts/build-server.sh` → `bun build --target=bun --production src/server/cli.ts
+  --outdir dist/server`. Self-contained (`package.json` is inlined, so `BDDB_VERSION` survives; no
+  `node_modules`/`src` at runtime). The `index.html` import becomes a manifest (`HTMLBundle.files`)
+  of files next to `cli.js`; static.ts resolves them relative to `import.meta.url`, **not** via
+  `Bun.serve` routes — those resolve manifest paths against the cwd and fail from another
+  directory.
+- **Binary**: `scripts/build-binary.sh [--target …]` → `bun build --compile --production
+  --target=bun-<os>-<arch> src/server/cli.ts --outfile dist/bddb-<os>-<arch>`. The HTML import
+  compiles into `/$bunfs/root/*` files listed in `HTMLBundle.files` (absolute paths, readable with
+  `Bun.file`), served the same way. Cross-compiling downloads the target bun once. Needs `bd` and
+  `git` in `PATH` at runtime.
+- **Image**: `Dockerfile` — stage `bd` downloads `beads_${BEADS_VERSION}_linux_${TARGETARCH}.tar.gz`
+  and verifies it with `checksums.txt`; stage `build` runs `scripts/build-server.sh`; runtime
+  `oven/bun:1.4-slim` + git + bd + `/app/server`, uid 1000, `ENTRYPOINT ["bddb"]` (`docker/bddb`
+  wrapper) `CMD ["serve"]`. Base images are digest-pinned (Renovate updates them). Labels
+  `org.beads.version`, `org.opencontainers.image.{source,version,licenses}`. `HEALTHCHECK` on
+  `/healthz` via `bun -e`. No `BDDB_WEB_DIR` needed: the bundle carries the SPA.
+- **Pins**: the beads version lives in `mise.toml` (source of truth), `Dockerfile` ARG,
+  `src/server/version.ts` `BUILT_FOR_BEADS` and the `ci.yml` matrix; `scripts/check-pins.sh`
+  enforces agreement (`--print` outputs the mise pin for scripts/CI). Renovate bumps all but
+  version.ts (`docs/compatibility.md` has the bump procedure).
+- **CI**: `ci.yml` — `check` (lint, typecheck, gen:api:check, unit, build, pins, actionlint),
+  `contract` (matrix over beads versions against a real `bd serve`), `docker` (hadolint, pins,
+  image build for the runner arch, label check). `docker.yml` — buildx amd64+arm64 →
+  `ghcr.io/umum-ai/bddb` with tags `sha-<7>`, `X.Y.Z`, `X.Y`, `latest` (main); PRs build only.
+  `release.yml` — release-please on `main` (conventional commits → release PR; the owner merges
+  → tag `vX.Y.Z` + GitHub release), then a matrix builds the four binaries and uploads them with
+  `.sha256` + `SHA256SUMS`, and `gh workflow run docker.yml --ref vX.Y.Z` builds the release image
+  (a tag created with `GITHUB_TOKEN` fires no `push: tags` event).
+- **Smoke**: `scripts/docker-smoke.sh` builds the image and runs it with `--network host`
+  against `scripts/stand.sh` (dolt bound via `STAND_DOLT_BIND`, `root@%` created when not
+  loopback); checks readyz, meta, snapshot, redirect, asset loading, label, doctor exit codes,
+  healthcheck probe. From a Linux VM under OrbStack/Docker Desktop: `SMOKE_DOLT_HOST=<VM IP>
+  SMOKE_HOST=host.docker.internal`.
+
 ## Compatibility
 
 Supported beads: `1.3.0-rc.2` and newer. The CI contract job is a matrix over
 `beads-version`; adding a version is one line. The `bd` inside the image must match the
-host's `bd` minor version (shared Dolt schema).
+host's `bd` minor version (shared Dolt schema). Matrix and bump procedure:
+`docs/compatibility.md`.

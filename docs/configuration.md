@@ -23,7 +23,7 @@ and exit code 2 (`bddb: BDDB_PORT must be an integer between 1 and 65535, got "7
 | `BDDB_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, `error`. `debug` includes every `bd serve` request line. |
 | `BDDB_LOG_FORMAT` | `--log-format` | `text` | `text` (human) or `json` (one object per line: `ts`, `level`, `msg`, fields). |
 | `BDDB_WORK_DIR` | `--work-dir` | `$TMPDIR/bddb` (else `os.tmpdir()/bddb`) | Where the synthesized beads workspaces (`<work-dir>/<database>`) and, with a base path, the built SPA (`<work-dir>/web`) live. Must be writable. Two bddb instances serving the same database name must use different work dirs. |
-| `BDDB_WEB_DIR` | `--web-dir` | build from `src/web` | A pre-built SPA directory (`bun build src/web/index.html --outdir DIR --public-path <base-path>/`). Serves files from disk instead of bundling. |
+| `BDDB_WEB_DIR` | `--web-dir` | assets embedded in the build, else build from `src/web` | A pre-built SPA directory (`scripts/build-web.sh DIR`, i.e. `bun build src/web/index.html --outdir DIR --production --public-path ./`). Serves files from disk; works under any `BDDB_BASE_PATH`. Not needed for the image or the release binaries — they carry the SPA. |
 
 Logging goes to stderr. `bd serve` output is forwarded with a `[bd:<database>]` prefix
 (request lines at `debug`, errors at `warn`).

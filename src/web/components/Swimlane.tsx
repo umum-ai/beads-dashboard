@@ -4,13 +4,20 @@
  * lane body. Each `Column` is a subgrid spanning every row, so the DOM stays column-major
  * (a card's nearest `[data-testid="column"]` is still its status) while lane headers span all
  * columns in their own row. Collapse state per lane persists in localStorage.
+ *
+ * A lane header is a drop zone: a card dropped on it gets the lane's epic as parent (the "no
+ * epic" lane clears the parent; a drill-down's "directly in" lane sets the drilled epic). The
+ * "+" in the header creates an issue with that parent.
  */
 import type { JSX } from "preact";
+import { useRef } from "preact/hooks";
 import { t } from "../i18n/index.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
 import { clampPriority } from "../lib/board.ts";
+import { useDropZone } from "../lib/dnd.ts";
 import type { Lane, Progress } from "../lib/hierarchy.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
+import { openCreate } from "../state/create.ts";
 import { columnWidths, DEFAULT_COLUMN_WIDTH, isLaneCollapsed, toggleLane } from "../state/prefs.ts";
 import { hrefFor, navigate } from "../state/route.ts";
 import { copyId } from "./Card.tsx";
@@ -76,6 +83,8 @@ interface LaneHeaderProps {
   fallbackLabel: string;
   /** Drill-down target for the lane's epic; omitted when the lane has no epic. */
   onOpen?: (() => void) | undefined;
+  /** Parent an issue gets when dropped on / created in this lane (`""` = none). */
+  parentId: string;
 }
 
 export function LaneHeader(props: LaneHeaderProps): JSX.Element {
@@ -84,13 +93,17 @@ export function LaneHeader(props: LaneHeaderProps): JSX.Element {
   const name = epic ? epic.title : props.fallbackLabel;
   const count = lane.issues.length;
   const detail = epic ? { kind: "issue" as const, db, issueId: epic.id } : null;
+  const ref = useRef<HTMLElement>(null);
+  const over = useDropZone(ref, { lane: { key: lane.key, parentId: props.parentId } });
   return (
     <header
-      class={`lane-head${collapsed ? " lane-head--collapsed" : ""}${epic ? "" : " lane-head--loose"}`}
+      ref={ref}
+      class={`lane-head${collapsed ? " lane-head--collapsed" : ""}${epic ? "" : " lane-head--loose"}${over ? " lane-head--over" : ""}`}
       style={{ gridRow: laneHeaderRow(index) }}
       data-testid="lane"
       data-lane={lane.key}
       data-priority={epic ? clampPriority(epic.priority) : undefined}
+      data-over={over ? "true" : undefined}
     >
       <div class="lane-head__in">
         <button
@@ -147,6 +160,16 @@ export function LaneHeader(props: LaneHeaderProps): JSX.Element {
           {t("board.lane.count", { count })}
         </span>
         {progress ? <ProgressBar progress={progress} wide testId="lane-progress" /> : null}
+        <button
+          type="button"
+          class="icon-btn lane-head__add"
+          aria-label={t("create.inLane", { name })}
+          title={t("create.inLane", { name })}
+          data-testid="lane-add"
+          onClick={() => openCreate({ parent: props.parentId || undefined })}
+        >
+          +
+        </button>
         {props.onOpen ? (
           <button
             type="button"
@@ -172,6 +195,8 @@ export interface SwimlaneBoardProps {
   onOpenEpic: (id: string) => void;
   /** Per-status extras (closed window, "show all") passed straight to `Column`. */
   columnExtras: (status: StatusDef) => Pick<ColumnProps, "closedDays" | "showAll">;
+  /** Parent id a card gets when it lands in the lane (`""` clears it). */
+  parentIdOf: (lane: Lane) => string;
 }
 
 export function SwimlaneBoard(props: SwimlaneBoardProps): JSX.Element {
@@ -202,6 +227,7 @@ export function SwimlaneBoard(props: SwimlaneBoardProps): JSX.Element {
       {columns.map((status, columnIndex) => {
         const cells = lanes.map((lane) => ({
           key: lane.key,
+          parentId: props.parentIdOf(lane),
           cards: byLaneStatus.get(lane.key)?.get(status.name) ?? [],
           collapsed: isLaneCollapsed(lane.key),
         }));
@@ -227,6 +253,7 @@ export function SwimlaneBoard(props: SwimlaneBoardProps): JSX.Element {
           progress={lane.epic ? props.progressOf(lane.epic) : null}
           fallbackLabel={props.fallbackLabel}
           onOpen={lane.epic ? () => props.onOpenEpic((lane.epic as BoardIssue).id) : undefined}
+          parentId={props.parentIdOf(lane)}
         />
       ))}
     </div>

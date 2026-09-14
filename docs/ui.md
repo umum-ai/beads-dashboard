@@ -10,10 +10,10 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 |---|---|
 | `index.html`, `main.tsx` | Bun HTML entry; mounts `<App />` into `#app`. |
 | `app.tsx` | Shell: loads `/api/meta`, switches views by route, keeps one live stream per displayed database, renders header, banner, drawer and toasts. |
-| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `Column` (flat and swimlane cell modes), `Card`, `Swimlane` (`SwimlaneBoard`, `LaneHeader`, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel`, `EmptyState`, `Toasts`, `VersionBanner`, `Popover`, `LiveIndicator`. |
+| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `QueryBar` (`QueryToggle`, the `bd query` strip), `Column` (flat and swimlane cell modes, drop zones, "+"), `Card` (draggable, selection, `⋯` menu), `Menu` (portal menu), `Swimlane` (`SwimlaneBoard`, `LaneHeader` as drop zone, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel` + `detail/` (`editor.ts`, `Fields`, `TextSections`, `Relations`), `editors/` (`IssuePicker`, `LabelsEditor`, `MarkdownEditor`), `CreateIssueModal`, `Dialog` (`DialogHost`), `EmptyState`, `Toasts`, `VersionBanner`, `Popover`, `LiveIndicator`. |
 | `views/` | `BoardView` (columns per status, swimlanes per epic, drill-down), `EpicsView` (epic list with progress and expandable children). |
-| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`), `live` (EventSource), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage`, `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
-| `state/` | Signals: `meta`, `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner), `toasts`. |
+| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`, read and write proxies), `mutations` (guarded PATCH, optimistic rows), `dnd-intent` (drop → writes resolver), `dnd` (pragmatic-drag-and-drop hooks), `live` (EventSource), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage`, `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
+| `state/` | Signals: `meta` (+ `actor`), `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner), `toasts`, `dialogs` (promise-based modals), `actions` (board writes: move, close, reopen, batch), `selection` (multi-select, drag, pending), `create` (new-issue modal request), `query` (query mode). |
 | `i18n/` | `en.json` (reference), `ru.json` (same keys), `index.ts` (`t`, `tOr`, language signal). |
 | `styles/` | `tokens.css` (design tokens, light and dark), `app.css` (all component styles). |
 | `dev/` | `mock-bff.ts` and `fixture.ts`: a `Bun.serve` implementation of the BFF API over an in-memory fixture, used for development and e2e. Not part of the product build. |
@@ -24,8 +24,9 @@ Routes: `/p/<db>/board`, `/p/<db>/epics`, `/p/<db>/issue/<id>` (board with the d
 open). `/` redirects (client-side) to the default database's board. Quick filters live in the
 query string (`?q=…&type=a,b&label=…&assignee=…&priority=0,1`) and survive reloads;
 project switches keep the view but drop the filters. `?epic=<id>` on the board is the
-drill-down target (see Hierarchy); it travels with the filters but is not one of them: "Clear
-filters" keeps it, the breadcrumbs drop it.
+drill-down target (see Hierarchy) and `?query=<expr>` the advanced-search expression (see Query
+mode); both travel with the filters but are not quick filters: "Clear filters" keeps them, the
+breadcrumbs drop `epic`, the query strip's Clear drops `query`.
 
 Base path discovery (`lib/basePath.ts`), in this order:
 
@@ -85,7 +86,8 @@ silently when a delta changes the row's `updated_at`, `status` or `comment_count
 fields (`description`, `design`, `acceptance_criteria`, `notes`, comment text) go through
 `marked` (GFM) and `DOMPurify`. The Hierarchy section (parent chain, children from the snapshot,
 dependency tree) is described under Hierarchy; the "Depends on" / "Blocks" lists come from the
-response's `dependencies` / `dependents` without the `parent-child` edges. Read-only until stage 5.
+response's `dependencies` / `dependents` without the `parent-child` edges. Editing is described
+under Editing.
 
 ## Hierarchy (stage 4)
 
@@ -183,8 +185,8 @@ MOCK_VERSION_WARNING="bd 1.4.0 vs 1.3.0" bun src/web/dev/mock-bff.ts   # show th
 
 The mock serves two databases (`siam_platform`, `sandbox`), emits a `snapshot` on connect and
 a `delta` every `MOCK_LIVE_MS` (default 4000) that flips `sp-d4e` between open and
-in_progress, and implements the read proxies plus create / patch / close / reopen / comments
-with `expected_version` guards.
+in_progress, and implements the read proxies, `issues:query` (a tiny expression subset) and
+every write proxy with the real guards (see "Testing the writes").
 
 e2e (Playwright, `tests/e2e`, config `playwright.config.ts`):
 
@@ -206,16 +208,165 @@ scripts/stand.sh down
 Two Playwright projects: `chromium` runs `tests/e2e/board.spec.ts` (board, drawer, theme, language,
 filters, resize) and `tests/e2e/epics.spec.ts` (swimlanes, group toggle, drill-down, epics view,
 drawer hierarchy — the tests named `real:` pick an epic with children from the snapshot, so they
-run against both targets; fixture-only assertions are skipped when `E2E_TARGET` is not `mock`), then `live` runs `tests/e2e/live.spec.ts` (real only): while the board is open it
+run against both targets; fixture-only assertions are skipped when `E2E_TARGET` is not `mock`)
+and `tests/e2e/edit.spec.ts` (every write: drag-and-drop, dialogs, drawer editing, creation,
+query mode; runs against both targets, see "Testing the writes"), then `live` runs
+`tests/e2e/live.spec.ts` (real only): while the board is open it
 creates an issue through `scripts/stand.sh create-issue "<title>"` and expects the card within
 10 s without a reload. `E2E_CREATE_ISSUE` replaces that command for another stand (it receives the
 title as its last argument and must print the new id).
 
+## Editing (stage 5)
+
+Every write goes through the BFF write proxies (`docs/bff-api.md`) with the `actor` from the
+header setting (`state/meta.ts` `actor`; comments send it as `author`). Errors are RFC 9457
+problems; the UI dispatches on `code` only — toasts translate known codes (`error.<code>` in
+`i18n/*.json`: `precondition_failed`, `not_closable`, `already_claimed`, `not_claimable`,
+`not_releasable`, `dependency_cycle`, `dependency_exists`, …) and show the `detail` otherwise.
+There is no delete anywhere in the UI.
+
+### Write layer
+
+- `lib/api.ts`: typed helpers for every proxy — `createIssue`, `patchIssue`, `closeIssue`,
+  `reopenIssue`, `claimIssue`, `releaseIssue`, `addComment`, `depAdd`, `depRemove`,
+  `batchApply`, `query` (`GET issues:query?q=…&limit=0`).
+- `lib/mutations.ts`: `guardedPatch(transport, db, id, actor, patch, opts)` reads
+  `GET issues/{id}` for `revision` (skipped when the caller already holds one), sends
+  `PATCH` with `expected_version` (plus `force_close_policy` / `force_assignee_transfer` when
+  asked) and returns `{ ok: true, response }`, `{ ok: false, kind: "conflict", currentRevision,
+  error }` on `409 precondition_failed`, or `{ ok: false, kind: "error", error }`. The
+  transport is injected so the unit tests run without a network; `patchGuarded` binds the real
+  `api`. `applyOptimistic(id, guess)` writes a local guess into the board signal and returns a
+  revert function; the revert is skipped when a delta has meanwhile replaced the row (the
+  server state won). Every board write applies the guess first, marks the card `pending`
+  (muted, not draggable), and on failure reverts and toasts.
+- `state/actions.ts`: `patchRow`, `closeRows`, `reopenRow`, `moveRows` (drop / menu entry
+  point), `setStatus`, `setPriority`, `setParent`. `moveRows` resolves the intent with
+  `lib/dnd-intent.ts` and runs the dialogs.
+
+### Drag-and-drop
+
+`@atlaskit/pragmatic-drag-and-drop` (native HTML5 drag): cards are draggables, the drop zones
+are the priority sections (`data-drop-status` / `data-drop-priority`), the lane cells and lane
+headers (swimlanes), and the column body (flat board). While a card is in the air every
+section of every column appears — empty ones as dashed "Drop here" placeholders tinted by their
+priority — so any priority can be targeted; the zone under the pointer fills in. A board-wide
+monitor takes the innermost zone under the pointer and calls `moveRows`. Shift / Ctrl / Cmd-click
+toggles a card in the multi-selection (a bar under the toolbar shows the count; Escape clears);
+dragging a selected card drags the whole selection with a count badge as preview. The `⋯` menu
+on each card (`Move to …`, `Set priority …`) is the keyboard alternative and follows the same
+paths.
+
+`lib/dnd-intent.ts` (`resolveDrop(source, target, statuses)`, pure, unit-tested) decides:
+
+| From → to | Writes |
+|---|---|
+| same column, other priority section | `PATCH {priority}` |
+| other column, neither done-category | `PATCH {status}` (+ `priority` when the section differs — one request) |
+| active/wip/frozen → done-category column | `POST :close` after the **reason dialog**; a different section or lane is patched afterwards; a done status other than the one `:close` set is patched too |
+| done → non-done column | `POST :reopen`, then `PATCH {status}` when the target is not `open` (+ priority / parent in the same patch) |
+| done → another done status | `PATCH {status}` |
+| onto another lane (header or cell) | `PATCH {parent_id}` = the lane's epic; the "No epic" lane sends `""`; a drill-down's "Directly in <epic>" lane sends the drilled epic. A drop inside the card's own lane leaves the parent alone; an epic cannot become its own parent |
+| lane + status + priority at once | one `PATCH` with every field when no close/reopen is involved |
+
+Multi-select drops: plain patches on several cards go through one `POST issues/batch-apply`
+with `update` items (status / priority; not guarded by `expected_version` because board rows
+carry no revision); parent changes fall back to single guarded patches (batch-apply has no
+`parent_id`); close / reopen run card by card with one reason dialog for the whole set and a
+force dialog per refusal.
+
+### Dialogs (`state/dialogs.ts`, `components/Dialog.tsx`)
+
+Promise-based (`ask(spec)` resolves with the answer or `null` on Cancel / Escape / backdrop);
+every dialog names the actor it will record.
+
+- **Close reason** — optional reason, Ctrl+Enter or Close confirms. For N cards it says
+  "N issues".
+- **Force** — on `409 not_closable`: with `open_children` the text says how many open children
+  the issue has, without it that an open dependency blocks it; "Close with force" retries with
+  `force: true` (or `force_close_policy` for a status select), Cancel puts the card back.
+- **Conflict** — on `409 precondition_failed` from the drawer: "Reload (discard mine)" re-reads
+  the issue and closes the editor, "Overwrite" re-reads the revision and retries the same
+  patch once. A conflict on a board drop is not a dialog: the card returns to its place and a
+  toast says "Changed by someone else" with the server's detail.
+
+### Detail drawer editing
+
+`components/detail/editor.ts` keeps the editing session: `save(patch)` is a guarded PATCH
+against the drawer's loaded `revision`; the response's issue is merged into the details and the
+new revision kept. Opening an inline editor (title, a markdown section) pauses the silent
+re-reads a live delta would trigger, so a concurrent write surfaces as the conflict dialog on
+Save instead of silently adopting the other writer's revision; the deferred re-read runs when
+the last editor closes.
+
+- Title: Edit → input, Enter / Save, Escape cancels.
+- Properties grid (`detail/Fields.tsx`): status (select; into a done status → the close dialog
+  path, out of done → reopen, otherwise `PATCH status`), type (`snapshot.types`), priority,
+  assignee (text with a datalist of known assignees, empty clears; Claim / Release buttons call
+  `:claim` / `:release` with the actor — `already_claimed` names the holder), labels (chips,
+  `add_labels` / `remove_labels`), parent (searchable picker over the snapshot, clear sends
+  `""`, ↗ opens the parent), due / defer-until (`datetime-local`, clear sends `null`), estimate
+  (minutes, empty → `null`), external ref (empty → `null`). Scalar controls save on change or
+  blur.
+- Text sections (`detail/TextSections.tsx`): description, design, acceptance criteria, notes.
+  Edit swaps in the markdown editor (Write / Preview tabs through the same `marked` +
+  `DOMPurify` renderer, Ctrl+Enter saves); Notes also offer Append (`append_notes`).
+- Dependencies (`detail/Relations.tsx`): "Depends on" (`dependencies` minus `parent-child`) and
+  "Blocks" (`dependents`) with a remove button per edge and Add through the issue picker;
+  `POST dependencies/add` with `type: "blocks"` — this issue is the source for "Depends on"
+  and the target for "Blocks" — and `dependencies/remove` with the same direction.
+- Comments: list plus an add form (markdown editor, `author` = actor).
+
+### Creating issues
+
+"+ New" in the toolbar (pre-fills the parent inside a drill-down), "+" in every column header
+(pre-fills the status) and in every lane header (pre-fills the parent: the lane's epic, or the
+drilled epic for the "Directly in" lane). The modal (`CreateIssueModal.tsx`) has title
+(required), type, priority, status, assignee, labels, parent (picker) and description
+(markdown editor); `POST issues` with the actor, then the drawer opens on the new issue.
+
+### Query mode
+
+The toolbar's "Query" toggle opens a strip with a `bd query` expression (`state/query.ts`,
+`components/QueryBar.tsx`). Run sends `GET issues:query?q=<expr>&limit=0` and the result
+replaces the board's issue set: rows the live snapshot also holds are taken from the snapshot,
+so deltas keep applying to them; rows outside the snapshot (older closed issues) come from the
+result. The strip turns into the "Query mode: N issues match" banner with a Clear button; quick
+filters still apply on top. The expression lives in the URL as `?query=<expr>` (the quick text
+filter already owns `?q=`), so it survives reloads and can be shared. A `400` (`param: "q"`)
+shows the translated title and the server's `detail` under the field; other failures show
+their detail the same way.
+
+## Testing the writes
+
+Unit: `tests/unit/web/mutations.test.ts` (guarded PATCH with an in-memory transport: revision
+read, `expected_version`, conflict result, optimistic apply / revert) and
+`tests/unit/web/dnd-intent.test.ts` (every row of the DnD table, multi-drop grouping).
+
+E2E: `tests/e2e/edit.spec.ts` creates its own issues through the write proxies, so it runs
+against the mock (in the `sandbox` database, leaving the `siam_platform` fixture untouched for
+the other specs) and against a real stand (`E2E_TARGET=real E2E_DB=kb`). Drags use real pointer
+events (`tests/e2e/helpers.ts` `dragCardTo`): press, small moves until the drop placeholders
+appear, scroll the target into view, measure its visible box, travel there in steps, release.
+Covered: priority drop, status (+ priority) drop, drop into Closed with the reason dialog
+(verified through `GET issues/{id}` and, on the stand, `scripts/stand.sh show-issue <id>` =
+`bd show --json`), cancel, epic with an open child → force dialog (both answers), reopen by
+dragging out of Closed, lane drop → parent, multi-select drop, card menu, title edit,
+stale-revision conflict (the test patches the issue behind the drawer's back, then Overwrite
+and Reload), comment, labels / priority / status selects, blocks dependency add + remove, the
+New issue modal, the column "+", query mode (invalid expression error, valid expression, URL
+persistence) and the Russian strings.
+
+The mock BFF (`dev/mock-bff.ts`) implements the same guards: `expected_version` →
+`precondition_failed`, close policy (`open_children`, live blocker) → `not_closable`,
+`dependency_cycle` / `dependency_exists`, `already_claimed` / `not_claimable` /
+`not_releasable`, all-or-nothing `issues/batch-apply`, and a tiny `bd query` subset (`status=`,
+`priority<=`/`<`/`>=`/`>`/`=`/`!=`, `type=`, `label=`, `assignee=`, joined by `AND`; anything
+else → `400 invalid_argument param=q`).
+
 ## Deferred
 
-- Stage 5: drag-and-drop (status, priority, parent) with guarded `PATCH`, close/reopen
-  dialogs with reason and force, editing every field in the drawer, comments, labels,
-  `blocks` edges, issue creation, `bd query` expression search, conflict dialog. The
-  `actor` setting already exists for these writes.
 - Stage 7: keyboard navigation between cards, full a11y pass, more empty/error states,
-  documentation polish.
+  documentation polish. Stage-5 leftovers: drop targets in the drawer's children list, a
+  guarded (`expected_version`) batch move, the sticky lane headers of lanes scrolled past
+  overlap each other.

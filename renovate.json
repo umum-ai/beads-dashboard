@@ -14,19 +14,55 @@
     },
     {
       "customType": "regex",
+      "description": "beads version baked into the image (Dockerfile ARG)",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["^ARG BEADS_VERSION=(?<currentValue>\\S+)$"],
+      "depNameTemplate": "gastownhall/beads",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
       "description": "beads version matrix in CI",
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
       "matchStrings": ["beads-version:\\s*\\[\\s*\"(?<currentValue>[^\"]+)\"\\s*\\]"],
       "depNameTemplate": "gastownhall/beads",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "dolt pinned in mise.toml (aqua backend)",
+      "managerFilePatterns": ["/^mise\\.toml$/"],
+      "matchStrings": ["\"aqua:dolthub/dolt\"\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "dolthub/dolt",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
     }
   ],
   "packageRules": [
     {
+      "description": "One PR per beads release for all four pins; src/server/version.ts BUILT_FOR_BEADS is bumped by hand in that PR (scripts/check-pins.sh fails CI until it is)",
       "matchDepNames": ["gastownhall/beads"],
       "groupName": "beads",
       "ignoreUnstable": false
+    },
+    {
+      "description": "bun runtime: mise pin and oven/bun base images (Dockerfile) move together",
+      "matchDepNames": ["bun", "oven/bun"],
+      "groupName": "bun"
+    },
+    {
+      "description": "dolt is only used by the local stand and CI contract tests",
+      "matchDepNames": ["dolthub/dolt"],
+      "groupName": "dolt"
+    },
+    {
+      "description": "Keep base-image digests current without a separate PR storm",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "docker digests",
+      "automerge": false
     }
   ]
 }

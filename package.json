@@ -20,7 +20,11 @@
     "gen:api": "scripts/gen-api.sh",
     "gen:api:check": "scripts/gen-api.sh --check",
     "e2e": "playwright test",
-    "docker:build": "docker build -t bddb .",
+    "build": "scripts/build-web.sh && scripts/build-server.sh",
+    "build:web": "scripts/build-web.sh",
+    "build:server": "scripts/build-server.sh",
+    "build:binary": "scripts/build-binary.sh",
+    "docker:build": "docker build --build-arg \"BEADS_VERSION=$(scripts/check-pins.sh --print)\" -t bddb .",
     "dev:mock": "bun src/web/dev/mock-bff.ts"
   },
   "dependencies": {

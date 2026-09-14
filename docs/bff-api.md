@@ -176,15 +176,21 @@ Everything not under `/api`, `/healthz`, `/readyz` serves the SPA (`index.html` 
 
 Base path mechanism — **`<base href>`** (decided; `window.__BDDB__` is not emitted):
 
-- `BDDB_BASE_PATH` empty (default): `src/web/index.html` is served through Bun HTML routes on
-  `/p/*`. Bun rewrites asset URLs to root-absolute paths (`/chunk-<hash>.js`), no `<base>` tag
-  is injected, and the SPA resolves its base path to `""`.
-- `BDDB_BASE_PATH=/prefix`: Bun HTML routes cannot prefix asset URLs, so the server builds the
-  SPA at start with `Bun.build({ publicPath: "/prefix/" })` (or serves a pre-built
-  `BDDB_WEB_DIR` built with the same `--public-path`) and injects `<base href="/prefix/">` right
-  after `<head>` in `index.html`. Assets are served at `/prefix/<file>` (hashed names get
-  `Cache-Control: immutable`), `/prefix/p/*` returns `index.html`, `/prefix` redirects to the
-  default board, and any request outside `/prefix` is `404`.
+- Running from a checkout with `BDDB_BASE_PATH` empty and no `BDDB_WEB_DIR`: `src/web/index.html`
+  is served through Bun HTML routes on `/p/*`. Bun rewrites asset URLs to root-absolute paths
+  (`/chunk-<hash>.js`), no `<base>` tag is injected, and the SPA resolves its base path to `""`.
+- Everything else — a prefix, a pre-built `BDDB_WEB_DIR`, or bddb running as a `bun build`
+  bundle / compiled binary (the image and the release binaries): **files mode**. The server
+  takes `index.html` plus the hashed assets from `BDDB_WEB_DIR` (built by `scripts/build-web.sh`
+  with `--public-path ./`), else from the assets `bun build` embedded next to / inside the server
+  (`HTMLBundle.files`), else builds them from `src/web` into `<work-dir>/web` at start. It
+  rewrites every asset URL in `index.html` to `./<file>` and injects `<base href="<prefix>/">`
+  right after `<head>` (`<base href="/">` for the root mount), so one build serves under any
+  prefix. Assets are served at `<prefix>/<file>` (hashed names get `Cache-Control: immutable`),
+  `<prefix>/p/*` returns `index.html`, `<prefix>` redirects to the default board, and any request
+  outside `<prefix>` is `404`.
 
-The SPA derives its base path from `document.querySelector("base[href]")` when present, else
-`""`, and prefixes every `/api/…` and `/p/…` URL with it (`src/web/lib/basePath.ts`).
+The SPA derives its base path from `document.querySelector("base[href]")` when present (`/` →
+`""`), else `""`, and prefixes every `/api/…` and `/p/…` URL with it (`src/web/lib/basePath.ts`).
+It must therefore never rely on document-relative URLs (`href="#…"`, `fetch("x")`): with a
+`<base>` tag they resolve against the base, not the page.

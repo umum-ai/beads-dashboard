@@ -1,0 +1,38 @@
+# bddb — kanban dashboard for beads. Copy to docker-compose.yml and adjust the env block.
+# The container carries only bddb and `bd`; your `dolt sql-server` and data stay on the host.
+# Details: docs/deployment.md, docs/host-setup.md (opening dolt to the container).
+services:
+  bddb:
+    image: ghcr.io/umum-ai/bddb:latest   # or ghcr.io/umum-ai/bddb:0.1 — bd inside must match your host's bd minor
+    container_name: bddb
+    restart: unless-stopped
+    ports:
+      - "7331:7331"                       # host:container; the dashboard listens on BDDB_PORT
+    environment:
+      # Your dolt sql-server. host.docker.internal is the host on Docker Desktop / OrbStack and,
+      # with the extra_hosts entry below, on Linux Docker Engine. Dolt must listen on 0.0.0.0
+      # (listener.host in dolt-server-config.yaml) and have a user allowed from remote hosts
+      # (fresh dolt has root@localhost only: CREATE USER 'root'@'%' … — see docs/host-setup.md).
+      BDDB_DOLT_HOST: host.docker.internal
+      BDDB_DOLT_PORT: "3308"                # beads shared server default
+      BDDB_DOLT_USER: root
+      # BDDB_DOLT_PASSWORD: ""              # set when your dolt user has one
+      # BDDB_DATABASES: shared,siam         # CSV; unset = discover every database with an `issues` table
+      # BDDB_DEFAULT_DATABASE: shared       # board opened at `/`; default: first database
+      # BDDB_BASE_PATH: /beads              # when served behind a reverse proxy under a prefix
+      # BDDB_ACTOR: bddb                    # default `actor` for writes when the UI has none
+      # BDDB_POLL_INTERVAL: 15s             # full re-read interval (fallback for workspaces without the journal)
+      # BDDB_CLOSED_DAYS: "7"               # window of closed issues shown on the board
+      # BDDB_LOG_LEVEL: info                # debug | info | warn | error
+      # BDDB_LOG_FORMAT: text               # text | json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux Docker Engine; harmless elsewhere
+    # Alternative for Linux: share the host's network so 127.0.0.1 is the host. Then remove
+    # `ports:` and `extra_hosts:` above, keep dolt on 127.0.0.1 and set BDDB_DOLT_HOST=127.0.0.1.
+    # network_mode: host
+    healthcheck:                            # the image ships one; this only tightens the timing
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:7331/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

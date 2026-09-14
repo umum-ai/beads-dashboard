@@ -134,7 +134,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           type="button"
           class="btn btn--ghost"
           data-testid="filters-clear"
-          onClick={() => setFilters({ ...EMPTY_FILTERS, epic: f.epic })}
+          onClick={() => setFilters({ ...EMPTY_FILTERS, epic: f.epic, query: f.query })}
         >
           {t("filters.clear")}
         </button>

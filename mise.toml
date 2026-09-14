@@ -51,6 +51,34 @@ run = "bun src/web/dev/mock-bff.ts"
 description = "Playwright e2e; E2E_TARGET=mock (default) starts the mock BFF, otherwise uses BDDB_URL"
 run = "bunx playwright test"
 
+[tasks."build:web"]
+description = "Production build of the SPA into dist/web (relative asset URLs; serve with BDDB_WEB_DIR)"
+run = "scripts/build-web.sh"
+
+[tasks."build:server"]
+description = "Self-contained server bundle (SPA included) into dist/server: bun dist/server/cli.js serve"
+run = "scripts/build-server.sh"
+
+[tasks.build]
+description = "build:web + build:server"
+depends = ["build:web", "build:server"]
+
+[tasks."build:binary"]
+description = "Single executable dist/bddb-<os>-<arch> (bun build --compile); --target bun-linux-x64|bun-linux-arm64|bun-darwin-x64|bun-darwin-arm64"
+run = "scripts/build-binary.sh"
+
+[tasks."check:pins"]
+description = "mise.toml, Dockerfile, version.ts and the CI matrix agree on the beads version"
+run = "scripts/check-pins.sh"
+
 [tasks."docker:build"]
-description = "Build the bddb container image (Dockerfile arrives in stage 6)"
-run = "docker build -t bddb ."
+description = "Build the container image with BEADS_VERSION from mise.toml"
+run = 'docker build --build-arg "BEADS_VERSION=$(scripts/check-pins.sh --print)" -t bddb .'
+
+[tasks."docker:lint"]
+description = "hadolint Dockerfile"
+run = "hadolint Dockerfile"
+
+[tasks."docker:smoke"]
+description = "Build the image and run it against a scratch stand (scripts/docker-smoke.sh)"
+run = "scripts/docker-smoke.sh"

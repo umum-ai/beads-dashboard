@@ -1,0 +1,102 @@
+name: Release
+
+# release-please keeps a release PR open on main (changelog + version bump from conventional
+# commits). When the owner merges it, the action tags vX.Y.Z and publishes a GitHub release; this
+# workflow then attaches single-file binaries (+ SHA256SUMS) and starts the Docker workflow on the
+# tag. The tag is created with GITHUB_TOKEN, so it fires no `push: tags` event by itself — hence
+# the explicit `gh workflow run docker.yml --ref <tag>` (workflow_dispatch is exempt from that rule).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release-please:
+    name: release PR / tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  binaries:
+    name: binary ${{ matrix.target }}
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `bun build --compile --target` cross-compiles from one runner (downloads the target runtime).
+        target: [bun-linux-x64, bun-linux-arm64, bun-darwin-x64, bun-darwin-arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+      - run: bun install --frozen-lockfile
+      - name: Build
+        run: scripts/build-binary.sh --target "${{ matrix.target }}"
+      - name: Package
+        id: pkg
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          name="bddb-${TARGET#bun-}"
+          asset="bddb-${VERSION}-${TARGET#bun-}.tar.gz"
+          tar -C dist -czf "$asset" "$name"
+          sha256sum "$asset" > "$asset.sha256"
+          "./dist/$name" version
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" "${{ steps.pkg.outputs.asset }}" "${{ steps.pkg.outputs.asset }}.sha256" --clobber
+
+  checksums:
+    name: SHA256SUMS
+    needs: [release-please, binaries]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect per-asset checksums into one file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir sums && cd sums
+          gh release download "$TAG" -R "$REPO" -p '*.sha256'
+          cat ./*.sha256 > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" -R "$REPO" SHA256SUMS --clobber
+
+  docker:
+    name: start Docker workflow on the tag
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run docker.yml -R "$REPO" --ref "$TAG"

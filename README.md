@@ -26,27 +26,49 @@ Early development. Nothing below is guaranteed to work yet. Target compatibility
 - Live updates through the `bd serve` events journal (SSE), with full-reread polling as a
   fallback.
 - Several databases of one Dolt server with a project switcher.
-- Shipped as a Docker image and a single binary.
+- Shipped as a Docker image (`ghcr.io/umum-ai/bddb`) and a single binary.
 
 ## Quick start (Docker)
 
-The image contains only the dashboard and the `bd` binary. Your `dolt sql-server` and data
-stay on your host; the container connects to Dolt over TCP.
+The image `ghcr.io/umum-ai/bddb` (linux/amd64, linux/arm64) contains only the dashboard and the
+`bd` binary. Your `dolt sql-server` and data stay on your host; the container connects to Dolt
+over TCP.
 
 ```sh
 docker run --rm -p 7331:7331 \
+  --add-host=host.docker.internal:host-gateway \
   -e BDDB_DOLT_HOST=host.docker.internal \
   -e BDDB_DOLT_PORT=3308 \
-  ghcr.io/<owner>/bddb
+  ghcr.io/umum-ai/bddb
 ```
 
-Then open <http://localhost:7331>.
+Then open <http://localhost:7331>. `docker run --rm … ghcr.io/umum-ai/bddb doctor` checks the
+connection first (`version` prints the bddb and beads versions).
 
-On Linux Docker Engine add `--add-host=host.docker.internal:host-gateway` or use
-`--network host`. Your Dolt server must accept connections from the container
-(`listener.host: 0.0.0.0` in `dolt-server-config.yaml` of the shared server, or host
-networking). A password-less Dolt listening on `0.0.0.0` exposes all of its data to your
-network — restrict it accordingly.
+Your Dolt server must accept connections from the container: `listener.host: 0.0.0.0` in
+`dolt-server-config.yaml` of the shared server **and** a user allowed from remote hosts (a fresh
+dolt has `root@localhost` only — see [docs/host-setup.md](docs/host-setup.md)). On Linux you can
+instead use `--network host` with `-e BDDB_DOLT_HOST=127.0.0.1` and keep Dolt on loopback.
+`--add-host` is needed on Linux Docker Engine only (Docker Desktop and OrbStack resolve
+`host.docker.internal` themselves). A password-less Dolt listening on `0.0.0.0` exposes all of
+its data to your network — restrict it accordingly.
+
+The `bd` inside the image must match your host's `bd` **minor** version: the image label
+`org.beads.version` and `bddb version` say which beads it was built for
+([docs/compatibility.md](docs/compatibility.md)). Compose file, reverse-proxy setup with
+`BDDB_BASE_PATH`, health checks and upgrade notes: [docs/deployment.md](docs/deployment.md).
+
+## Single binary
+
+GitHub Releases carry `bddb-<version>-{linux,darwin}-{x64,arm64}.tar.gz` with a `.sha256` each.
+The binary embeds the dashboard and the bun runtime; it needs `bd` (same minor as your host
+beads) and `git` in `PATH`:
+
+```sh
+tar -xzf bddb-0.1.0-linux-x64.tar.gz && install -m 0755 bddb-linux-x64 ~/.local/bin/bddb
+bddb doctor --dolt-host 127.0.0.1 --dolt-port 3308      # all ✓ ?
+bddb serve  --dolt-host 127.0.0.1 --dolt-port 3308      # → http://localhost:7331
+```
 
 ## Running from source
 
@@ -57,13 +79,10 @@ bddb version            # bddb version and the beads version it was built for
 bddb help
 ```
 
-`bddb` is `bun src/server/cli.ts` in a checkout (`bun run serve`, `bun run doctor`). Typical
-host run against the beads shared server:
-
-```sh
-bddb doctor --dolt-host 127.0.0.1 --dolt-port 3308      # all ✓ ?
-bddb serve  --dolt-host 127.0.0.1 --dolt-port 3308      # → http://localhost:7331
-```
+`bddb` is `bun src/server/cli.ts` in a checkout (`bun run serve`, `bun run doctor`); the same
+flags work for the single binary and inside the container. `mise run build` produces a
+self-contained `dist/server` (`bun dist/server/cli.js serve`), `mise run build:binary` the single
+executable.
 
 `doctor` prints a ✓/✗ table — `bd` binary and version, `git`, Dolt reachability, discovered
 databases, a temporary `bd serve` for the first database, the events journal — with a hint

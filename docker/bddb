@@ -1,0 +1,3 @@
+#!/bin/sh
+# Entry point of the bddb image: `bddb serve` / `bddb doctor` / `bddb version`.
+exec bun /app/server/cli.js "$@"

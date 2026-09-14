@@ -9,3 +9,4 @@ dist/
 # Playwright
 test-results/
 playwright-report/
+.stand-*/

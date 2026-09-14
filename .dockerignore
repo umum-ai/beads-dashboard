@@ -1,0 +1,10 @@
+# Only what the image build needs (Dockerfile COPY: package.json, bun.lock, tsconfig.json, src/, scripts/build-server.sh, docker/bddb).
+*
+!package.json
+!bun.lock
+!tsconfig.json
+!src/
+!scripts/build-server.sh
+!docker/bddb
+src/web/dev/
+**/*.test.ts

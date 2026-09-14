@@ -5,10 +5,31 @@
 
 import { withBase } from "./basePath.ts";
 import type {
+  AddCommentBody,
+  BatchApplyBody,
+  BatchApplyResponse,
+  ClaimIssueBody,
+  ClaimIssueResponse,
+  CloseIssueBody,
+  CloseIssueResponse,
+  Comment,
+  CreateIssueBody,
+  DepAddBody,
+  DepAddResponse,
+  DepRemoveBody,
+  DepRemoveResponse,
+  Issue,
   IssueDetails,
   IssueListResponse,
   Meta,
+  PatchIssueBody,
+  PatchIssueResponse,
   Problem,
+  QueryPage,
+  ReleaseIssueBody,
+  ReleaseIssueResponse,
+  ReopenIssueBody,
+  ReopenIssueResponse,
   Snapshot,
   TreePage,
 } from "./bff-types.ts";
@@ -105,8 +126,52 @@ export const api = {
     apiFetch<TreePage>(
       `/api/p/${db(database)}/dependencies/tree?root_id=${encodeURIComponent(rootId)}&direction=${direction}&max_depth=${maxDepth}`,
     ),
+  /** `GET issues:query?q=` proxy — the `bd query` expression language (`400 param=q` on a bad expression). */
+  query: (database: string, q: string) =>
+    apiFetch<QueryPage>(`/api/p/${db(database)}/issues:query?q=${encodeURIComponent(q)}&limit=0`),
   eventsUrl: (database: string) => withBase(`/api/p/${db(database)}/events`),
+
+  // Writes (docs/bff-api.md "write proxies"). Bodies are the bd serve bodies; every one carries
+  // `actor` (`author` for comments) — callers take it from `state/meta.ts` `actor`.
+  createIssue: (database: string, body: CreateIssueBody) =>
+    post<Issue>(`/api/p/${db(database)}/issues`, body),
+  patchIssue: (database: string, id: string, body: PatchIssueBody) =>
+    apiFetch<PatchIssueResponse>(`/api/p/${db(database)}/issues/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  closeIssue: (database: string, id: string, body: CloseIssueBody) =>
+    post<CloseIssueResponse>(`/api/p/${db(database)}/issues/${encodeURIComponent(id)}/close`, body),
+  reopenIssue: (database: string, id: string, body: ReopenIssueBody) =>
+    post<ReopenIssueResponse>(
+      `/api/p/${db(database)}/issues/${encodeURIComponent(id)}/reopen`,
+      body,
+    ),
+  claimIssue: (database: string, id: string, body: ClaimIssueBody) =>
+    post<ClaimIssueResponse>(`/api/p/${db(database)}/issues/${encodeURIComponent(id)}/claim`, body),
+  releaseIssue: (database: string, id: string, body: ReleaseIssueBody) =>
+    post<ReleaseIssueResponse>(
+      `/api/p/${db(database)}/issues/${encodeURIComponent(id)}/release`,
+      body,
+    ),
+  addComment: (database: string, id: string, body: AddCommentBody) =>
+    post<Comment>(`/api/p/${db(database)}/issues/${encodeURIComponent(id)}/comments`, body),
+  depAdd: (database: string, body: DepAddBody) =>
+    post<DepAddResponse>(`/api/p/${db(database)}/dependencies/add`, body),
+  depRemove: (database: string, body: DepRemoveBody) =>
+    post<DepRemoveResponse>(`/api/p/${db(database)}/dependencies/remove`, body),
+  batchApply: (database: string, body: BatchApplyBody) =>
+    post<BatchApplyResponse>(`/api/p/${db(database)}/issues/batch-apply`, body),
 };
+
+function post<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
 
 /** Load every done-category issue (`all=true`) following `next_cursor` while `has_more`. */
 export async function loadAllClosed(database: string, statuses: string[]) {

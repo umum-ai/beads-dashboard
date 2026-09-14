@@ -31,9 +31,19 @@ beads shared server (`bd init --shared-server`), or whatever `bd dolt show` prin
   ```
 
   and restart the server (`bd dolt stop && bd dolt start` in any shared-server workspace, or
-  restart whatever supervises it). Then point the container at the host:
-  `-e BDDB_DOLT_HOST=host.docker.internal`. Docker Desktop and OrbStack resolve that name;
-  on Linux Docker Engine add `--add-host=host.docker.internal:host-gateway`.
+  restart whatever supervises it). A fresh dolt (2.3.x) only creates `root@localhost`, so a
+  connection from another host fails with `Access denied for user 'root'` until a remote user
+  exists — once, against the running server:
+
+  ```sh
+  dolt --host 127.0.0.1 --port 3308 --user root --password "" --no-tls sql \
+    -q "CREATE USER IF NOT EXISTS 'root'@'%'; GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+  ```
+
+  (or a dedicated user with a password → `BDDB_DOLT_USER` / `BDDB_DOLT_PASSWORD`). Then point the
+  container at the host: `-e BDDB_DOLT_HOST=host.docker.internal`. Docker Desktop and OrbStack
+  resolve that name; on Linux Docker Engine add `--add-host=host.docker.internal:host-gateway`.
+  The full recipe with `docker run` / compose examples: [deployment.md](deployment.md).
 
 **Warning.** The beads shared server runs as `root` **without a password**. Once it listens on
 `0.0.0.0`, every process that can reach the port can read and change every database. Keep the
