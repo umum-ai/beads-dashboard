@@ -93,13 +93,17 @@ docker compose exec bddb bddb doctor
 ### Health checks
 
 - `GET /healthz` → `200 ok` (text) while the process runs.
-- `GET /readyz` → `200` once at least one database is `ready`, `503` before / when every
-  database is down. Use it as the readiness probe.
+- `GET /readyz` → `200` once at least one database is `ready` (or `degraded` — it still serves
+  its last snapshot), `503` before / when every database is `starting` or `down`. Use it as the
+  readiness probe.
 - The image's `HEALTHCHECK` polls `/healthz` (30 s interval, 20 s start period) with `bun`
   itself — no curl in the image. It honours `BDDB_PORT` and `BDDB_BASE_PATH`.
 - `GET /api/meta` shows every database with `state` (`starting|ready|degraded|down`), `live`
-  (`sse|polling`), the `bd serve` version and a `versionWarning` when it differs from the beads
-  release bddb was built for.
+  (`sse|polling|none`), `lastError` (why it is down or degraded: the supervisor's reason and the
+  last line `bd serve` printed), the `bd serve` version and a `versionWarning` when it differs
+  from the beads release bddb was built for. The same information is on screen: the header
+  indicator, a banner above a board that still has data, or a full-page state with the hints of
+  `bddb doctor`.
 
 ### Behind a reverse proxy
 

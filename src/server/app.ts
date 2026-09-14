@@ -10,6 +10,7 @@ import path from "node:path";
 import type { Config } from "./config.ts";
 import { DiscoveryError, discoverDatabases, doltConnection } from "./discovery.ts";
 import type { Logger } from "./log.ts";
+import { checkBd } from "./preflight.ts";
 import { jsonResponse, problemResponse } from "./problem.ts";
 import { DatabaseRuntime } from "./project.ts";
 import {
@@ -43,6 +44,10 @@ export interface CreateAppOptions {
 
 export async function createApp(options: CreateAppOptions): Promise<App> {
   const { config, log } = options;
+  // Fail fast on a missing / unsupported bd: without it every database would stay `down`.
+  const bd = await checkBd(config.bdPath);
+  if (bd.warning) log.warn(bd.warning);
+  log.info(`bd: ${bd.raw} (${config.bdPath}); dolt: ${config.doltHost}:${config.doltPort}`);
   const names =
     options.databases ??
     (await discoverDatabases({ connection: doltConnection(config), requested: config.databases }));
@@ -90,7 +95,15 @@ export async function createApp(options: CreateAppOptions): Promise<App> {
   for (const runtime of runtimes.values()) runtime.start();
 
   const url = `http://${server.hostname}:${server.port}${config.basePath}`;
-  log.info("bddb listening", { url, static: statics.mode, base_path: config.basePath || "/" });
+  // A wildcard bind is not a URL a browser can open; print the loopback one next to it.
+  const open =
+    server.hostname === "0.0.0.0" || server.hostname === "::"
+      ? `http://127.0.0.1:${server.port}${config.basePath}/`
+      : `${url}/`;
+  log.info(`dashboard: ${open}`, { listen: url, static: statics.mode });
+  for (const runtime of runtimes.values()) {
+    log.info(`database ${runtime.name}: ${runtime.info.state} (starting bd serve)`);
+  }
 
   let stopping: Promise<void> | null = null;
   return {

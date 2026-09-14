@@ -1,10 +1,12 @@
 /**
  * Modal host for `state/dialogs.ts`: close reason, force close, conflict, plain confirm.
- * Focus lands on the first control; Escape and the backdrop dismiss (answer `null`).
+ * Focus lands on the first control and is trapped in the dialog until it closes, then returns
+ * to the opener (`lib/focus-trap.ts`); Escape and the backdrop dismiss (answer `null`).
  */
 import type { ComponentChildren, JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { t } from "../i18n/index.ts";
+import { trapFocus } from "../lib/focus-trap.ts";
 import { answer, type DialogSpec, dialog, dismiss } from "../state/dialogs.ts";
 import { actor } from "../state/meta.ts";
 
@@ -22,11 +24,8 @@ function Frame({
   danger?: boolean | undefined;
 }): JSX.Element {
   const root = useRef<HTMLFormElement>(null);
-  useEffect(() => {
-    const first = root.current?.querySelector<HTMLElement>(
-      "textarea, input, button[data-autofocus], button.btn--primary, button.btn--danger",
-    );
-    first?.focus();
+  useLayoutEffect(() => {
+    const release = root.current ? trapFocus(root.current) : () => {};
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -35,7 +34,10 @@ function Frame({
       }
     };
     document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      release();
+    };
   }, []);
   return (
     <div class="modal" data-testid="modal-backdrop">

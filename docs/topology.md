@@ -57,10 +57,15 @@ No `project_id` is written (a mismatch would make bd refuse to connect), so
 
 ## Process lifecycle
 
+- Before anything else bddb checks that `bd` runs and is a supported version, and that Dolt
+  answers discovery; otherwise it exits 2 with hints (`docs/configuration.md`, "Startup
+  failures") instead of serving a board of `down` databases.
 - `bd serve` exits with code 1 when Dolt is unreachable at start → the supervisor retries with
-  exponential backoff (1 s → 30 s).
+  exponential backoff (1 s → 30 s); the database is `down` and `DatabaseInfo.lastError` carries
+  the exit code and the last telling line `bd serve` printed.
 - Dolt disappearing after start → `bd serve` stays up and answers `503 db_unavailable`; the
-  database is reported `degraded`; bd recovers by itself when Dolt is back.
+  database is reported `degraded` (`lastError` = the problem code and detail), the last
+  snapshot keeps being served; bd recovers by itself when Dolt is back.
 - `bd serve` talks to Dolt through a detached `bd db-proxy-child` it forks (pid in
   `.beads/dolt/proxy.pid`). The proxy outlives `bd serve` and is never respawned; if it dies,
   every request is `503` forever. bddb therefore restarts `bd serve` **and** the proxy when

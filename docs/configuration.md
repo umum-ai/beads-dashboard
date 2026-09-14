@@ -26,7 +26,31 @@ and exit code 2 (`bddb: BDDB_PORT must be an integer between 1 and 65535, got "7
 | `BDDB_WEB_DIR` | `--web-dir` | assets embedded in the build, else build from `src/web` | A pre-built SPA directory (`scripts/build-web.sh DIR`, i.e. `bun build src/web/index.html --outdir DIR --production --public-path ./`). Serves files from disk; works under any `BDDB_BASE_PATH`. Not needed for the image or the release binaries — they carry the SPA. |
 
 Logging goes to stderr. `bd serve` output is forwarded with a `[bd:<database>]` prefix
-(request lines at `debug`, errors at `warn`).
+(request lines at `debug`, errors at `warn`). At start bddb prints one line for the `bd` it
+found, the `dashboard: http://…/` URL to open (the loopback address when bound to `0.0.0.0`)
+and one line per database (`database kb: starting (starting bd serve)` → `database kb: bd serve
+127.0.0.1:<port> (bd 1.3.0-rc.2), loading snapshot` → `database kb: ready — 5 issues, live
+sse`); a database that dies logs `database kb: down — bd serve process exited (exit 137): …`.
+
+## Startup failures
+
+`bddb serve` refuses to start, prints a multi-line message with the same hints `bddb doctor`
+gives, and exits with code **2** when the operator has something to fix; unexpected errors
+exit **1** with a stack trace. Verified messages:
+
+| Situation | Message (first line) and hints |
+|---|---|
+| invalid value | `bddb: BDDB_PORT must be an integer between 1 and 65535, got "70000"` → `see bddb help and docs/configuration.md` |
+| dolt unreachable (wrong host/port, not running, firewalled) | `bddb: cannot start: cannot query dolt at 127.0.0.1:3798 as root: Failed to connect` → `is dolt sql-server running and reachable from here? (try bddb doctor)`, `from a container the host's dolt must listen on 0.0.0.0 … or use --network host`, `check BDDB_DOLT_USER / BDDB_DOLT_PASSWORD` |
+| `BDDB_DATABASES` names a missing database | `bddb: cannot start: BDDB_DATABASES names a database that does not exist on the dolt server: nope` → `databases present: kb` |
+| a named database has no `issues` table | `… names a database without an issues table (not a beads database?): x` → `beads databases present: …` |
+| nothing to serve (auto-discovery) | `bddb: cannot start: no beads database found on the dolt server` → `databases present but without an issues table: …` / `the server has no user databases at all`, `is this the right dolt? check BDDB_DOLT_HOST / BDDB_DOLT_PORT (shared-server default: 3308)`, `a beads workspace must have been initialised in server mode against it (bd init --server / --shared-server)`, `or list databases explicitly with BDDB_DATABASES=name1,name2` |
+| `bd` missing | `bddb: cannot start: cannot run "/nonexistent version": bd binary not found or not executable` → `install beads (…) so that bd is in PATH, or set BDDB_BD_PATH`, `the release binary and a source checkout need bd and git on the host; the container image already carries both`, `bddb doctor runs this and the other startup checks` |
+| `bd` too old / other major | `bddb: cannot start: bd 1.2.9 at bd is not supported by this bddb (built for beads 1.3.0-rc.2): minor version mismatch` → `bd serve needs beads 1.3.0-rc.2 or newer in the same major; upgrade bd …`, `docs/compatibility.md lists which bddb goes with which beads`. A **newer** minor only logs a warning (and the UI shows the version banner). |
+
+A database that becomes unreachable *after* start is not a startup failure: it is reported as
+`down` / `degraded` in `/api/meta` and in the UI while the supervisor restarts `bd serve`
+([bff-api](bff-api.md), `DatabaseInfo.lastError`).
 
 ## Database discovery
 

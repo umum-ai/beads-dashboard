@@ -1,5 +1,5 @@
 /** Board data for the current database: snapshot state, live status, extra closed rows. */
-import { computed, signal } from "@preact/signals";
+import { computed, effect, signal } from "@preact/signals";
 import type { BoardIssue, DatabaseInfo } from "../lib/bff-types.ts";
 import { type BoardState, emptyBoardState } from "../lib/delta.ts";
 import { buildIndex, type HierarchyIndex } from "../lib/hierarchy.ts";
@@ -10,8 +10,15 @@ export const boardError = signal<unknown>(null);
 /** Database this `board` belongs to (guards against late responses after a switch). */
 export const boardDb = signal<string | null>(null);
 
-export type Connection = "idle" | "connecting" | "open" | "disconnected";
+/**
+ * EventSource state. `closed` = the server is reachable but refused the stream (the database
+ * is starting or down; `dbInfo.state` says which); `disconnected` = the dashboard server
+ * itself cannot be reached.
+ */
+export type Connection = "idle" | "connecting" | "open" | "closed" | "disconnected";
 export const connection = signal<Connection>("idle");
+/** When the server became unreachable (`connection === "disconnected"`), for the elapsed time. */
+export const disconnectedSince = signal<number | null>(null);
 export const dbInfo = signal<DatabaseInfo | null>(null);
 
 /** Closed issues outside the closed window, loaded on demand ("Show all closed"). */
@@ -19,9 +26,20 @@ export const extraClosed = signal<Map<string, BoardIssue>>(new Map());
 export const extraClosedLoading = signal(false);
 export const extraClosedLoaded = signal(false);
 
-/** Ticks every 15 s so relative times re-render. */
+/** Ticks every 15 s so relative times re-render; every second while the server is unreachable. */
 export const now = signal(Date.now());
-if (typeof setInterval !== "undefined") setInterval(() => (now.value = Date.now()), 15_000);
+if (typeof setInterval !== "undefined") {
+  setInterval(() => (now.value = Date.now()), 15_000);
+  let fast: ReturnType<typeof setInterval> | null = null;
+  effect(() => {
+    const active = disconnectedSince.value !== null;
+    if (active && !fast) fast = setInterval(() => (now.value = Date.now()), 1000);
+    if (!active && fast) {
+      clearInterval(fast);
+      fast = null;
+    }
+  });
+}
 
 export const allIssues = computed<BoardIssue[]>(() => {
   const main = board.value.issues;

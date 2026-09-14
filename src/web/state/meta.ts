@@ -26,15 +26,16 @@ export async function loadMeta(): Promise<Meta | null> {
   }
 }
 
-/** Merge a `status` frame into the meta database list so the header reflects it. */
+/**
+ * Merge a `status` frame into the meta database list so the header reflects it. The list is
+ * fixed at server start, so a database meta does not know is ignored (a late snapshot from a
+ * stream opened before meta arrived must not resurrect it).
+ */
 export function updateDatabaseInfo(info: DatabaseInfo): void {
   const current = meta.value;
-  if (!current) return;
-  const exists = current.databases.some((d) => d.name === info.name);
+  if (!current?.databases.some((d) => d.name === info.name)) return;
   meta.value = {
     ...current,
-    databases: exists
-      ? current.databases.map((d) => (d.name === info.name ? info : d))
-      : [...current.databases, info],
+    databases: current.databases.map((d) => (d.name === info.name ? info : d)),
   };
 }

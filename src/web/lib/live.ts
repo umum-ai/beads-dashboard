@@ -1,10 +1,15 @@
 /**
  * Live stream: one EventSource per displayed database. `snapshot` replaces the state, `delta`
  * is applied in sequence (a gap refetches `/snapshot`), `status` updates the database info.
- * EventSource reconnects on its own; every reconnect yields a fresh `snapshot` frame.
+ *
+ * Reconnects: on a network failure EventSource retries by itself (readyState CONNECTING); when
+ * the server refuses the stream (`503 bddb_not_ready` while the database is starting or down,
+ * or the process is gone) the browser gives up (CLOSED) and we reopen it ourselves with a
+ * backoff, probing `/api/meta` on the way so the header shows whether the dashboard server or
+ * only its database is unreachable. Every reconnect yields a fresh `snapshot` frame.
  */
 
-import { updateDatabaseInfo } from "../state/meta.ts";
+import { meta, updateDatabaseInfo } from "../state/meta.ts";
 import {
   board,
   boardDb,
@@ -12,6 +17,7 @@ import {
   boardLoading,
   connection,
   dbInfo,
+  disconnectedSince,
   resetBoard,
 } from "../state/snapshot.ts";
 import { ApiError, api } from "./api.ts";
@@ -22,6 +28,11 @@ let source: EventSource | null = null;
 let activeDb: string | null = null;
 let refetching = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+
+const RECONNECT_MIN_MS = 2000;
+const RECONNECT_MAX_MS = 15_000;
 
 /** Problem codes that mean "come back later" rather than "something is wrong". */
 const RETRY_CODES = new Set(["bddb_not_ready", "db_unavailable", "busy"]);
@@ -36,6 +47,17 @@ function parse<T>(event: MessageEvent): T | null {
   } catch {
     return null;
   }
+}
+
+function markConnected(): void {
+  connection.value = "open";
+  disconnectedSince.value = null;
+  reconnectAttempt = 0;
+}
+
+function markDisconnected(): void {
+  connection.value = "disconnected";
+  if (disconnectedSince.value === null) disconnectedSince.value = Date.now();
 }
 
 function acceptSnapshot(db: string, snapshot: Snapshot): void {
@@ -75,29 +97,55 @@ export async function refetchSnapshot(db: string): Promise<void> {
   }
 }
 
-export function connectLive(db: string): void {
-  if (activeDb === db && source) return;
-  disconnectLive();
-  activeDb = db;
-  resetBoard();
-  boardLoading.value = true;
-  connection.value = "connecting";
-
-  if (typeof EventSource === "undefined") {
-    void refetchSnapshot(db);
-    return;
+/**
+ * The stream was refused or the server vanished: find out which. A reachable `/api/meta`
+ * means the dashboard server is fine and only the database is not ready — its state (and
+ * `lastError`) come from meta; otherwise the server itself is unreachable.
+ */
+async function probeServer(db: string): Promise<void> {
+  try {
+    const m = await api.meta();
+    if (db !== activeDb) return;
+    meta.value = m;
+    const info = m.databases.find((d) => d.name === db);
+    if (info) dbInfo.value = info;
+    connection.value = "closed";
+    disconnectedSince.value = null;
+  } catch {
+    if (db === activeDb) markDisconnected();
   }
+}
 
+function scheduleReconnect(db: string): void {
+  if (reconnectTimer) return;
+  const delay = Math.min(RECONNECT_MIN_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  reconnectAttempt++;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (db === activeDb) openStream(db);
+  }, delay);
+}
+
+function openStream(db: string): void {
+  source?.close();
   const es = new EventSource(api.eventsUrl(db));
   source = es;
+  if (connection.value !== "disconnected") connection.value = "connecting";
 
   es.addEventListener("open", () => {
-    if (db === activeDb) connection.value = "open";
+    if (db === activeDb) markConnected();
   });
   es.addEventListener("error", () => {
-    if (db !== activeDb) return;
-    connection.value = es.readyState === EventSource.CLOSED ? "disconnected" : "connecting";
-    // A stream that never opens (e.g. the server does not implement SSE) still needs data.
+    if (db !== activeDb || source !== es) return;
+    if (es.readyState === EventSource.CLOSED) {
+      // Refused (503 while starting/down) or the server is gone: probe, then reopen ourselves.
+      void probeServer(db);
+      scheduleReconnect(db);
+    } else {
+      // Network failure; the browser is already retrying.
+      markDisconnected();
+    }
+    // A stream that never opened still needs data for the first paint.
     if (board.value.seq < 0 && !boardError.value) void refetchSnapshot(db);
   });
   es.addEventListener("snapshot", (event) => {
@@ -121,13 +169,35 @@ export function connectLive(db: string): void {
   });
 }
 
+export function connectLive(db: string): void {
+  if (activeDb === db && source) return;
+  disconnectLive();
+  activeDb = db;
+  resetBoard();
+  boardLoading.value = true;
+  connection.value = "connecting";
+  disconnectedSince.value = null;
+  reconnectAttempt = 0;
+
+  if (typeof EventSource === "undefined") {
+    void refetchSnapshot(db);
+    return;
+  }
+  openStream(db);
+}
+
 export function disconnectLive(): void {
   if (retryTimer) {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   source?.close();
   source = null;
   activeDb = null;
   connection.value = "idle";
+  disconnectedSince.value = null;
 }

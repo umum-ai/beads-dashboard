@@ -2,6 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "vulnerabilityAlerts": {
+    "schedule": ["at any time"],
+    "labels": ["dependencies", "security"]
+  },
+  "platformAutomerge": true,
   "customManagers": [
     {
       "customType": "regex",
@@ -45,7 +51,8 @@
       "description": "One PR per beads release for all four pins; src/server/version.ts BUILT_FOR_BEADS is bumped by hand in that PR (scripts/check-pins.sh fails CI until it is)",
       "matchDepNames": ["gastownhall/beads"],
       "groupName": "beads",
-      "ignoreUnstable": false
+      "ignoreUnstable": false,
+      "schedule": ["at any time"]
     },
     {
       "description": "bun runtime: mise pin and oven/bun base images (Dockerfile) move together",
@@ -62,6 +69,33 @@
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["digest"],
       "groupName": "docker digests",
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions: one grouped PR (digest-pinned SHAs move together)",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Runtime npm dependencies (preact, signals, pragmatic-dnd, marked, dompurify): grouped minor/patch PR, reviewed by hand — they ship in the SPA",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm dependencies"
+    },
+    {
+      "description": "Tooling devDependencies (typescript, @types/bun, openapi-typescript): minor/patch automerge once the CI check job (lint, typecheck, gen:api:check, unit, build) and the contract matrix are green — requires branch protection with those checks required",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchDepNames": ["!@playwright/test", "!@axe-core/playwright"],
+      "groupName": "dev tooling",
+      "automerge": true
+    },
+    {
+      "description": "Playwright and axe drive the e2e suite, which CI does not run: never automerge, one grouped PR to run `mise run e2e` on by hand",
+      "matchDepNames": ["@playwright/test", "@axe-core/playwright"],
+      "groupName": "playwright",
       "automerge": false
     }
   ]

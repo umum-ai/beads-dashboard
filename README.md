@@ -9,23 +9,34 @@ your network or a reverse proxy; and **live updates from changes made by agents 
 CLI require `bd config set events-journal true`** in each workspace they write from, otherwise
 those changes appear only on the next polling cycle.
 
+![The board in the light theme: status columns, priority sections, swimlanes per epic](docs/screenshots/board-light.png)
+
+![The same board in the dark theme](docs/screenshots/board-dark.png)
+
 ## Status
 
-Early development. Nothing below is guaranteed to work yet. Target compatibility: beads
-`1.3.0-rc.2` and later.
+Pre-release (`0.x`): the feature set below is implemented and tested against beads
+`1.3.0-rc.2`; the API and the UI may still change between minor versions. Target
+compatibility: beads `1.3.0-rc.2` and later on the same minor ([docs/compatibility.md](docs/compatibility.md)).
 
-## What it does (planned)
+## What it does
 
-- Kanban board per workspace: columns by status (built-in plus `status.custom`), cards grouped
-  into priority sections, light and dark themes, English and Russian UI.
-- Hierarchy: swimlanes per epic, drill-down into an epic, an epics view with progress, and a
-  parent/children/blockers tree in the issue panel.
-- Editing: create issues, drag-and-drop between statuses, priorities and parents, close/reopen
-  with a reason, comments, labels, `blocks` dependencies — all with optimistic-concurrency
-  guards (`expected_version`).
-- Live updates through the `bd serve` events journal (SSE), with full-reread polling as a
-  fallback.
-- Several databases of one Dolt server with a project switcher.
+- Kanban board per database: columns by status (built-in plus `status.custom`), cards in
+  priority sections P0–P4, resizable columns, quick filters (text, type, label, assignee,
+  priority) and a `bd query` expression mode, light and dark themes, English and Russian UI.
+- Hierarchy: swimlanes per epic, drill-down into an epic with breadcrumbs, an epics view with
+  progress, and a parent / children / dependency tree in the issue drawer.
+- Editing: create issues, drag-and-drop between statuses, priorities and epics (multi-select
+  too), close / reopen with a reason and a force dialog, comments, labels, `blocks`
+  dependencies, claim / release, every field of an issue — all with optimistic-concurrency
+  guards (`expected_version`) and a conflict dialog.
+- Live updates through the `bd serve` events journal (SSE) with full-reread polling as a
+  fallback; the header says which one is in effect.
+- Keyboard-first: Tab and arrows move between cards, Enter opens, Space menus, `/` filters,
+  `n` creates, `?` lists the shortcuts; dialogs trap focus; both themes pass WCAG AA contrast.
+- Several databases of one Dolt server with a project switcher; clear on-screen states when a
+  database is starting, its `bd serve` is down, Dolt is unreachable or the dashboard server
+  itself is gone — with the same hints `bddb doctor` prints.
 - Shipped as a Docker image (`ghcr.io/umum-ai/bddb`) and a single binary.
 
 ## Quick start (Docker)
@@ -70,6 +81,24 @@ bddb doctor --dolt-host 127.0.0.1 --dolt-port 3308      # all ✓ ?
 bddb serve  --dolt-host 127.0.0.1 --dolt-port 3308      # → http://localhost:7331
 ```
 
+## How it works
+
+```text
+browser ──same origin──▶ bddb (one process, one port) ──loopback──▶ bd serve × N ──TCP──▶ your dolt sql-server
+          SPA + /api + SSE   discovery, supervisor, snapshot, fan-out    one per database        (host, port 3308)
+```
+
+`bddb serve` connects to your Dolt once to list the beads databases (`SHOW DATABASES`, the only
+SQL it ever runs), synthesizes a server-mode workspace per database and starts one `bd serve`
+on a loopback port for each, supervised and restarted with backoff. Per database it keeps an
+in-memory snapshot (issues, ready set, statuses, stats) fresh through **one** `events:watch`
+stream plus a periodic full re-read, and fans out `snapshot` / `delta` / `status` frames to
+every browser tab over SSE. Writes from the UI are proxied to `bd serve` unchanged (with the
+actor you chose in the header), errors come back as the RFC 9457 problems `bd serve` produces.
+The SPA (Preact) holds the snapshot, applies deltas and renders the board; nothing is stored
+server-side except the synthesized workspaces in `BDDB_WORK_DIR`. Details:
+[docs/topology.md](docs/topology.md), [docs/bff-api.md](docs/bff-api.md), [docs/ui.md](docs/ui.md).
+
 ## Running from source
 
 ```sh
@@ -95,10 +124,13 @@ under every failed row, and exits non-zero when a critical check fails:
                          → is `dolt sql-server` running? shared-server mode: `bd dolt status` …
 ```
 
-`serve` discovers the databases (or takes `BDDB_DATABASES`), starts one `bd serve` per
-database on a loopback port, and serves the board on `BDDB_HOST:BDDB_PORT`. Process endpoints:
-`/healthz` (alive), `/readyz` (200 once a database is ready), `/api/meta`. Stop with Ctrl-C;
-every `bd serve` it started is stopped too.
+`serve` checks `bd`, discovers the databases (or takes `BDDB_DATABASES`), starts one `bd serve`
+per database on a loopback port, and serves the board on `BDDB_HOST:BDDB_PORT`; it prints the
+URL to open and one line per database as it comes up. When something is missing (Dolt
+unreachable, no beads database, `bd` not found or unsupported) it prints the same hints as
+`doctor` and exits 2 ([docs/configuration.md](docs/configuration.md#startup-failures)). Process
+endpoints: `/healthz` (alive), `/readyz` (200 once a database is ready), `/api/meta`. Stop
+with Ctrl-C; every `bd serve` it started is stopped too.
 
 ### Configuration
 
@@ -116,7 +148,9 @@ Full reference with flags and semantics: [docs/configuration.md](docs/configurat
 | `BDDB_POLL_INTERVAL` | `15s` | polling fallback interval |
 | `BDDB_CLOSED_DAYS` | `7` | window of closed issues shown on the board |
 | `BDDB_BD_PATH` | `bd` from `PATH` | path to the `bd` binary |
-| `BDDB_LOG_LEVEL` | `info` | log verbosity |
+| `BDDB_LOG_LEVEL` / `BDDB_LOG_FORMAT` | `info` / `text` | log verbosity and format (`text` or `json`) |
+| `BDDB_WORK_DIR` | `$TMPDIR/bddb` | synthesized workspaces (one directory per running instance) |
+| `BDDB_WEB_DIR` | embedded SPA | pre-built SPA directory (rarely needed) |
 
 ### Host setup
 
@@ -131,8 +165,14 @@ Details in [docs/host-setup.md](docs/host-setup.md); the short version:
 - Run `bddb doctor` to check Dolt connectivity, discovered databases, the `bd` version and
   the journal.
 
-How the pieces fit together: [docs/topology.md](docs/topology.md). The HTTP contract between
-the server and the SPA: [docs/bff-api.md](docs/bff-api.md).
+## Documentation
+
+[docs/README.md](docs/README.md) is the index. In short: [topology](docs/topology.md) (what
+runs where and why), [host setup](docs/host-setup.md), [configuration](docs/configuration.md),
+[deployment](docs/deployment.md) (image, binary, reverse proxy, health), [compatibility](docs/compatibility.md)
+(beads versions, pins, bump procedure), [BFF API](docs/bff-api.md) (the contract between the
+server and the SPA), [api-client](docs/api-client.md) (the typed `bd serve` client),
+[UI](docs/ui.md) (layout, keyboard shortcuts, states, mock and e2e).
 
 ## Development
 
@@ -147,7 +187,9 @@ mise run test
 mise run dev
 ```
 
-See [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) (stand, e2e, contract tests, PR checklist),
+[AGENTS.md](AGENTS.md) (the operating manual for the agents maintaining this repository) and
+[SECURITY.md](SECURITY.md).
 
 ## License
 

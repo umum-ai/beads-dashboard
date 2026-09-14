@@ -57,6 +57,8 @@ export interface DatabaseInfo {
   projectId: string | null;
   versionWarning: string | null;
   capabilities: string[];
+  /** Why the database is `down` / `degraded` (supervisor reason + last `bd serve` line). */
+  lastError?: string | null;
 }
 
 export type StatusCategory = "active" | "wip" | "frozen" | "done";

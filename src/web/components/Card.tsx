@@ -1,14 +1,18 @@
 /**
- * One board card. The title is a real link to the issue route; the whole card is clickable
- * for mouse users. The id is a button that copies itself. The card is a pragmatic-dnd
- * draggable (a selected card drags the whole selection); Shift / Ctrl-click toggles selection.
- * The "⋯" menu is the keyboard alternative to dragging (move to status, set priority).
+ * One board card. The card itself is the keyboard stop (`tabindex=0`): Enter opens the drawer,
+ * Space / the context-menu key open the "⋯" menu, arrows move between cards and columns
+ * (`lib/board-keys.ts`); the inner controls (id copy, menu button) are reachable with the mouse
+ * and through those keys, not with Tab, so a board of hundreds of cards stays tabbable. The
+ * title is a real link for middle-click / copy-link; the whole card is clickable for mouse users;
+ * Shift / Ctrl-click toggles the multi-selection. The card is a pragmatic-dnd draggable (a
+ * selected card drags the whole selection); the menu is the keyboard alternative to dragging.
  */
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { t, tOr } from "../i18n/index.ts";
 import type { BoardIssue } from "../lib/bff-types.ts";
 import { clampPriority, PRIORITIES } from "../lib/board.ts";
+import { navigateCards } from "../lib/board-keys.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { useDraggableCard } from "../lib/dnd.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
@@ -39,8 +43,19 @@ export function typeLabel(type: string | undefined): string {
   return tOr(`type.${key}`, key);
 }
 
-function CardMenu({ db, issue }: { db: string; issue: BoardIssue }): JSX.Element {
-  const [open, setOpen] = useState(false);
+function CardMenu({
+  db,
+  issue,
+  open,
+  setOpen,
+  card,
+}: {
+  db: string;
+  issue: BoardIssue;
+  open: boolean;
+  setOpen: (next: boolean) => void;
+  card: { current: HTMLElement | null };
+}): JSX.Element {
   const button = useRef<HTMLButtonElement>(null);
   const statuses = board.value.statuses;
   const current = issue.status ?? "open";
@@ -56,6 +71,7 @@ function CardMenu({ db, issue }: { db: string; issue: BoardIssue }): JSX.Element
         aria-label={t("card.menu", { id: issue.id })}
         title={t("card.menu.help")}
         data-testid="card-menu"
+        tabIndex={-1}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -68,6 +84,7 @@ function CardMenu({ db, issue }: { db: string; issue: BoardIssue }): JSX.Element
         open={open}
         onClose={close}
         anchor={button}
+        restoreTo={card}
         label={t("card.menu", { id: issue.id })}
         testId="card-menu-panel"
       >
@@ -120,9 +137,11 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
   const showProgress = total > 0 || type === "epic";
   const labels = issue.labels ?? [];
   const ref = useRef<HTMLElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const isPending = pending.value.has(issue.id);
   const isDragging = useDraggableCard(ref, issue.id, !isPending);
   const selected = isSelected(issue.id);
+  const titleId = `card-title-${issue.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   useEffect(() => {
     if (lane === undefined) cardLanes.delete(issue.id);
     else cardLanes.set(issue.id, lane);
@@ -141,6 +160,31 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
     navigate(target);
   };
 
+  // Keys on the card itself: Enter opens, Space / ContextMenu / Shift+F10 open the menu,
+  // arrows / Home / End move between cards, Shift+Space toggles the selection.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      navigate(target);
+    } else if (
+      event.key === " " ||
+      event.key === "ContextMenu" ||
+      (event.key === "F10" && event.shiftKey)
+    ) {
+      event.preventDefault();
+      if (event.key === " " && event.shiftKey) toggleSelected(issue.id);
+      else setMenuOpen(true);
+    } else if (
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      navigateCards(issue.id, event.key)
+    ) {
+      event.preventDefault();
+    }
+  };
+
   const classes = ["card"];
   if (issue.blocked) classes.push("card--blocked");
   if (done) classes.push("card--done");
@@ -149,10 +193,12 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
   if (isPending) classes.push("card--pending");
 
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: the title link inside is the keyboard target
     <article
       ref={ref}
       class={classes.join(" ")}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: the card is the board's keyboard stop (Enter opens, Space menus, arrows move); its inner controls are tabindex=-1
+      tabIndex={0}
+      aria-labelledby={titleId}
       data-testid="card"
       data-id={issue.id}
       data-priority={priority}
@@ -160,6 +206,13 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
       data-selected={selected ? "true" : undefined}
       aria-busy={isPending ? "true" : undefined}
       onClick={open}
+      onKeyDown={onKeyDown}
+      onContextMenu={(e) => {
+        // right click: the card menu instead of the browser's
+        if (e.shiftKey) return;
+        e.preventDefault();
+        setMenuOpen(true);
+      }}
     >
       <div class="card__top">
         <span class="card__type" title={typeLabel(type)} role="img" aria-label={typeLabel(type)}>
@@ -171,6 +224,7 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
           title={t("card.copyId", { id: issue.id })}
           aria-label={t("card.copyId", { id: issue.id })}
           data-testid="card-id"
+          tabIndex={-1}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -188,14 +242,16 @@ export function Card({ db, issue, done, lane }: CardProps): JSX.Element {
         <span class="pchip" title={t(`priority.name.${priority}`)} data-testid="card-priority">
           {t(`priority.${priority}`)}
         </span>
-        <CardMenu db={db} issue={issue} />
+        <CardMenu db={db} issue={issue} open={menuOpen} setOpen={setMenuOpen} card={ref} />
       </div>
       <a
         class="card__title"
+        id={titleId}
         href={hrefFor(target)}
         title={issue.title}
         data-testid="card-title"
         draggable={false}
+        tabIndex={-1}
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           e.preventDefault();

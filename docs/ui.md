@@ -10,9 +10,9 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 |---|---|
 | `index.html`, `main.tsx` | Bun HTML entry; mounts `<App />` into `#app`. |
 | `app.tsx` | Shell: loads `/api/meta`, switches views by route, keeps one live stream per displayed database, renders header, banner, drawer and toasts. |
-| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `QueryBar` (`QueryToggle`, the `bd query` strip), `Column` (flat and swimlane cell modes, drop zones, "+"), `Card` (draggable, selection, `⋯` menu), `Menu` (portal menu), `Swimlane` (`SwimlaneBoard`, `LaneHeader` as drop zone, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel` + `detail/` (`editor.ts`, `Fields`, `TextSections`, `Relations`), `editors/` (`IssuePicker`, `LabelsEditor`, `MarkdownEditor`), `CreateIssueModal`, `Dialog` (`DialogHost`), `EmptyState`, `Toasts`, `VersionBanner`, `Popover`, `LiveIndicator`. |
+| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `QueryBar` (`QueryToggle`, the `bd query` strip), `Column` (flat and swimlane cell modes, drop zones, "+"), `Card` (draggable, selection, `⋯` menu), `Menu` (portal menu), `Swimlane` (`SwimlaneBoard`, `LaneHeader` as drop zone, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel` + `detail/` (`editor.ts`, `Fields`, `TextSections`, `Relations`), `editors/` (`IssuePicker`, `LabelsEditor`, `MarkdownEditor`), `CreateIssueModal`, `Dialog` (`DialogHost`), `EmptyState` (title, body, `detail` block, `hints` list, primary + secondary action, spinner), `Toasts`, `VersionBanner`, `StatusBanners` (`ConnectionBanner`, `DatabaseBanner`), `ShortcutsHelp` (the `?` dialog), `Popover`, `LiveIndicator`. |
 | `views/` | `BoardView` (columns per status, swimlanes per epic, drill-down), `EpicsView` (epic list with progress and expandable children). |
-| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`, read and write proxies), `mutations` (guarded PATCH, optimistic rows), `dnd-intent` (drop → writes resolver), `dnd` (pragmatic-drag-and-drop hooks), `live` (EventSource), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage`, `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
+| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`, read and write proxies), `mutations` (guarded PATCH, optimistic rows), `dnd-intent` (drop → writes resolver), `dnd` (pragmatic-drag-and-drop hooks), `live` (EventSource, reconnect, server probe), `keyboard` (shortcut resolver, arrow-key card navigation over columns of ids), `board-keys` (DOM glue for it), `focus-trap` (dialog focus trap + return), `contrast` (WCAG arithmetic over `tokens.css`, used by the unit test only), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage` (local + session), `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
 | `state/` | Signals: `meta` (+ `actor`), `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner), `toasts`, `dialogs` (promise-based modals), `actions` (board writes: move, close, reopen, batch), `selection` (multi-select, drag, pending), `create` (new-issue modal request), `query` (query mode). |
 | `i18n/` | `en.json` (reference), `ru.json` (same keys), `index.ts` (`t`, `tOr`, language signal). |
 | `styles/` | `tokens.css` (design tokens, light and dark), `app.css` (all component styles). |
@@ -50,8 +50,12 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
   paged by `next_cursor`). Merged into `allIssues` behind the snapshot rows.
 - `childStats`: derived `Map<parentId, {total, closed}>` from `parent` links, used for epic
   progress on cards when the row does not carry `epic_*` counters.
-- `connection`: EventSource state (`idle`/`connecting`/`open`/`disconnected`); `dbInfo`: latest
-  `DatabaseInfo` for the current database (from the snapshot or a `status` frame).
+- `connection`: EventSource state — `idle`, `connecting`, `open`, `closed` (the server refused
+  the stream because the database is starting or down; `dbInfo.state` says which) or
+  `disconnected` (the dashboard server itself is unreachable; `disconnectedSince` holds the
+  timestamp and `now` ticks every second meanwhile). `dbInfo`: latest `DatabaseInfo` for the
+  current database (from the snapshot, a `status` frame, or `/api/meta` re-read while the stream
+  is refused). See "Connection and server states".
 - Failed `/snapshot` with `bddb_not_ready`, `db_unavailable` or `busy` shows the "starting"
   state and retries after `Retry-After` (default 3 s, capped at 30 s).
 - `hierarchy`: `HierarchyIndex` (`lib/hierarchy.ts`) over `allIssues`, rebuilt when the rows
@@ -59,8 +63,8 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
 - `prefs` persist in `localStorage` under `bddb.`: `theme`, `lang`, `actor`, `columnWidths`
   (per status name), `collapsed` (per `status:priority`, or `status@<lane>:priority` inside a
   swimlane), `groupByEpic` (default `true`), `collapsedLanes` (per epic id, `""` = no-epic
-  lane), `dismissedVersionWarning`. Every
-  access is guarded; missing storage only means no persistence.
+  lane). `dismissedVersionWarning` lives in **sessionStorage** (the banner comes back on the
+  next visit). Every access is guarded; missing storage only means no persistence.
 
 ## Board rules
 
@@ -79,8 +83,10 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
 
 ## Detail drawer
 
-Opened by clicking a card (URL `/p/<db>/issue/<id>`), closed by Escape, the backdrop or the
-close button (URL returns to the board). Loads
+Opened by clicking a card or pressing Enter on it (URL `/p/<db>/issue/<id>`), closed by
+Escape, the backdrop or the close button (URL returns to the board and focus returns to the
+card). It is `role="dialog" aria-modal="false"` labelled by the title (`h2`; sections are `h3`,
+tree parts `h4`). Loads
 `GET /api/p/<db>/issues/<id>?include_comments=true&include_dependents=true` and re-reads
 silently when a delta changes the row's `updated_at`, `status` or `comment_count`. Markdown
 fields (`description`, `design`, `acceptance_criteria`, `notes`, comment text) go through
@@ -111,8 +117,13 @@ CSS grid whose columns are the status columns (shared widths, resizable as befor
 rows alternate lane header / lane body; every `Column` is a subgrid spanning all rows, so the DOM
 stays column-major (a card's nearest `[data-testid="column"]` is still its status) while lane
 headers span the full width in their own row. Column headers stick to the top of the scrolling
-board, lane headers under them; the lane header's content strip sticks to the left edge while
-the wide grid scrolls horizontally.
+board, lane headers under them — each lane header sits in a `.lane-frame` that spans the lane's
+header + body rows and is the header's sticky containing block, so a header sticks only while
+its lane is in view and is pushed out by the next one (Chromium does not constrain a sticky
+grid item to its grid area, hence the frame; header rows have explicit heights because the
+frame is their only occupant). The lane header's content strip sticks to the left edge while
+the wide grid scrolls horizontally; the page itself never scrolls (`body { overflow: hidden }`),
+only the board does, in both axes.
 
 Drill-down: `/p/<db>/board?epic=<id>` shows only the descendants of `<id>` (any depth), grouped
 into lanes by the epic's direct sub-epics plus a "Directly in <id>" lane; without sub-epics (or
@@ -143,6 +154,90 @@ first path that reached it (bd's rule), so a child reachable through a blocking 
 labelled `blocks`. Loading, error (with retry) and empty states are explicit. The blocked badge
 in the drawer header, on cards, lane headers and epic rows carries the same tooltip: open but
 not in the ready set — blocked by a dependency or deferred.
+
+## Keyboard and accessibility (stage 7)
+
+Shortcuts (`lib/keyboard.ts` decides, `app.tsx` and `Card.tsx` apply; the `?` dialog lists them):
+
+| Where | Key | Action |
+|---|---|---|
+| anywhere (no text field focused, no modifier) | `/` | focus the quick filter (`#quick-filter`) |
+| | `n` | New issue (pre-fills the drilled epic as parent); not in the drawer |
+| | `?` | open / close the shortcuts help |
+| | `Esc` | close a dialog, menu or the drawer; clear the multi-selection |
+| on a card (`tabindex=0`) | `Tab` / `Shift+Tab` | previous / next card — the id button, menu button and title link inside are `tabindex=-1`, so a board of hundreds of cards stays tabbable |
+| | `↑` `↓` | previous / next card in the column (clamped) |
+| | `←` `→` | same row in the nearest non-empty column to the left / right |
+| | `Home` `End` | first / last card of the column |
+| | `Enter` | open the drawer |
+| | `Space`, `ContextMenu`, `Shift+F10`, right click | the card menu (move to status, set priority); `↑`/`↓` inside, `Esc` closes and focus returns to the card |
+| | `Shift+Space` | toggle the card in the multi-selection |
+| dialogs and editors | `Ctrl+Enter` | save (markdown editors, close-reason dialog) |
+| | `Esc` | cancel an inline edit; close the dialog |
+| column resize handle | `←` `→` (`Shift` = 64 px), `Home` | resize / reset (unchanged from stage 3) |
+
+Rules the components follow:
+
+- Every modal (`Dialog` frames, `CreateIssueModal`, `ShortcutsHelp`) is `role="dialog"` /
+  `"alertdialog"` + `aria-modal="true"` + `aria-labelledby`, installs `trapFocus`
+  (`lib/focus-trap.ts`) in a layout effect: initial focus on `[data-autofocus]`, else the first
+  field, else the primary button; `Tab` cycles inside; on close focus returns to the opener —
+  or, when the opener was a menu item that unmounted with its menu, to the card the menu
+  belongs to (`noteFocusOrigin`).
+- The card is the only tab stop of a card (`aria-labelledby` its title); the biome rule
+  `noNoninteractiveTabindex` is suppressed there on purpose. Arrow navigation reads the visible
+  cards column by column from the DOM (`lib/board-keys.ts`), so it works in flat and swimlane
+  mode and honours filters and collapsed sections.
+- Live regions: toasts are `<output role="status">` (`role="alert"` for errors); the header
+  indicator is `aria-live="polite" aria-atomic`, so mode changes (`Live` → `Down` →
+  `Disconnected 12 s — retrying`) are announced once. Loading states are `aria-busy`.
+- Every icon-only button carries `aria-label` (and `title`); the board and epics pages have an
+  `sr-only` `h1`; heading levels inside the drawer are ordered.
+- Focus is always visible (`:focus-visible` ring on `--focus`; cards get a ring plus a halo
+  that survives the column's overflow clipping); `prefers-reduced-motion` disables
+  transitions and animations (the spinner degrades to a static ring).
+- Colour contrast: `tests/unit/web/contrast.test.ts` computes WCAG ratios for every text /
+  background pair the stylesheet uses (body text, secondary and tertiary text on every
+  surface, links, chips, banners, priority chips solid and outline, category stripes), in both
+  themes, and fails under AA (4.5:1 text, 3:1 graphics). Stage 7 darkened `--ink-2/3`, `--ok`,
+  `--warn`, `--p1`, `--p2`, `--p4` (light) and lightened `--ink-3` (dark); text on solid
+  fills uses the `--pchip-ink` / `--danger-ink` tokens instead of hard-coded white.
+- `tests/e2e/a11y.spec.ts` covers the shortcuts, focus traps and return, the states below, and
+  runs `@axe-core/playwright` (WCAG 2.1 A/AA tags) on the board, the drawer, the help dialog
+  and the dark theme with zero serious/critical violations.
+
+## Empty, error and connection states
+
+Every state says what it is, why, and offers the one action that changes it (`EmptyState`:
+title, body, optional `detail` block with the raw error, `hints` list, primary and secondary
+action). `data-testid` in brackets.
+
+| Situation | Where | Shown |
+|---|---|---|
+| `/api/meta` fails on boot | page | `Cannot reach the dashboard server` with the error, hints (is `bddb serve` running; base path behind a proxy) and Retry [`meta-error`] |
+| `/api/meta` lists no database | page | `No databases` with the checks `bddb doctor` prints (Dolt host/port, server-mode workspace, `BDDB_DATABASES`) and Reload [`no-databases`] |
+| unknown database / path | page | message + "Open the board" |
+| database `starting` | board | spinner, `Starting <db>` [`db-starting`]; indicator `Starting` |
+| database `down`, no data yet | board | `<db> is unavailable`, body, the server's `lastError` in a code block, hints, Retry [`db-down`]; indicator red `Down` |
+| database `degraded`, no data yet | board | `<db> is degraded`, `lastError`, Dolt hints (host/port, `listener.host` from a container) [`db-degraded`] |
+| `down` / `degraded` while the board has data | banner under the header | one line + hints + `lastError` [`db-banner`]; the board keeps its last state |
+| dashboard server unreachable | header | `Disconnected — retrying`, after 5 s with the elapsed seconds; after 10 s a banner with Reload [`connection-banner`]; both clear on reconnect |
+| board with no issues | board | `No issues yet` + "Create the first issue" [`board-empty`] |
+| quick filters match nothing | board / epics | `No issue matches the current filters.` + "Clear filters" (keeps drill-down and query) [`filter-empty`] |
+| drill-down with no descendants | board | "Create an issue in this epic" (parent pre-filled) + "All issues" [`drill-empty`] |
+| query mode with no rows | board | `No matches` + "Clear" (drops `?query=`) [`query-empty`]; while running, the spinner |
+| no epics | epics | `No epics yet` + "Create an epic" (type pre-filled) + Board [`epics-empty`] |
+| empty column | board | `Nothing here` (flat board); an empty lane cell is a plain drop area |
+| drawer for an unknown id (`404`) | drawer | `Issue <id> was not found` + "Back to board" [`detail-error`, `detail-back`]; other errors show the detail with Retry and "Back to board" |
+| version mismatch | banner | `bd X does not match … (built for Y)`, the schema-risk explanation, a link to `docs/compatibility.md`, Dismiss (per tab) [`version-banner`] |
+
+Connection handling (`lib/live.ts`): a network failure lets `EventSource` retry by itself and
+marks `disconnected`; a refused stream (`503 bddb_not_ready` — database starting or down —
+or a vanished server) closes the `EventSource`, so the client probes `/api/meta`: reachable →
+`connection = "closed"`, `dbInfo` refreshed from meta (state + `lastError`), stream reopened
+with a backoff of 2 s → 15 s; unreachable → `disconnected` since now. A stream that survives a
+`bd serve` restart receives `status` frames and a fresh `snapshot`, so nothing is reloaded. The
+board keeps showing its last data in every case; only writes fail.
 
 ## i18n rules
 
@@ -210,11 +305,18 @@ filters, resize) and `tests/e2e/epics.spec.ts` (swimlanes, group toggle, drill-d
 drawer hierarchy — the tests named `real:` pick an epic with children from the snapshot, so they
 run against both targets; fixture-only assertions are skipped when `E2E_TARGET` is not `mock`)
 and `tests/e2e/edit.spec.ts` (every write: drag-and-drop, dialogs, drawer editing, creation,
-query mode; runs against both targets, see "Testing the writes"), then `live` runs
+query mode; runs against both targets, see "Testing the writes") and `tests/e2e/a11y.spec.ts`
+(keyboard shortcuts, focus traps, empty / error / connection states simulated with
+`page.route`, axe scans — both targets), then `live` runs
 `tests/e2e/live.spec.ts` (real only): while the board is open it
 creates an issue through `scripts/stand.sh create-issue "<title>"` and expects the card within
 10 s without a reload. `E2E_CREATE_ISSUE` replaces that command for another stand (it receives the
-title as its last argument and must print the new id).
+title as its last argument and must print the new id); `STAND_DIR` points it at a stand in
+another directory.
+
+The README screenshots come from the mock: `mise run screenshots` (`scripts/screenshots.ts`)
+writes `docs/screenshots/board-{light,dark}.png` at 1440×900 and fails when a file exceeds
+300 KB.
 
 ## Editing (stage 5)
 
@@ -366,7 +468,9 @@ else → `400 invalid_argument param=q`).
 
 ## Deferred
 
-- Stage 7: keyboard navigation between cards, full a11y pass, more empty/error states,
-  documentation polish. Stage-5 leftovers: drop targets in the drawer's children list, a
-  guarded (`expected_version`) batch move, the sticky lane headers of lanes scrolled past
-  overlap each other.
+- Stage-5 leftovers: drop targets in the drawer's children list, a guarded (`expected_version`)
+  batch move.
+- Roving `tabindex` (one tab stop per column) instead of one per card; `aria-keyshortcuts` on
+  cards; a "skip to board" link.
+- Epic child counters do not see children closed before the `BDDB_CLOSED_DAYS` window; the
+  drill-down toolbar count is the whole board's count.

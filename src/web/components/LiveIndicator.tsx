@@ -8,7 +8,7 @@ import type { DatabaseInfo } from "../lib/bff-types.ts";
 import { formatDateTime, formatRelative } from "../lib/time.ts";
 import { databases, meta } from "../state/meta.ts";
 import { currentDb } from "../state/route.ts";
-import { type Connection, connection, dbInfo, now } from "../state/snapshot.ts";
+import { type Connection, connection, dbInfo, disconnectedSince, now } from "../state/snapshot.ts";
 
 export type LiveTone = "ok" | "warn" | "danger" | "none";
 
@@ -24,11 +24,16 @@ export function describeLive(
   info: DatabaseInfo | null,
   conn: Connection,
   pollIntervalMs: number,
+  /** Seconds since the server became unreachable (`disconnected` only). */
+  offlineSeconds = 0,
 ): LiveDescriptor {
   if (conn === "disconnected") {
     return {
       tone: "danger",
-      label: t("live.offline"),
+      label:
+        offlineSeconds >= 5
+          ? t("live.disconnected.for", { seconds: offlineSeconds })
+          : t("live.disconnected"),
       tooltip: t("live.tooltip.disconnected"),
       mode: "disconnected",
     };
@@ -37,7 +42,12 @@ export function describeLive(
     return { tone: "none", label: t("live.connecting"), tooltip: "", mode: "connecting" };
   }
   if (info.state === "down") {
-    return { tone: "danger", label: t("live.down"), tooltip: t("state.down.body"), mode: "down" };
+    return {
+      tone: "danger",
+      label: t("live.down"),
+      tooltip: info.lastError ? `${t("state.down.body")}\n${info.lastError}` : t("state.down.body"),
+      mode: "down",
+    };
   }
   if (info.state === "starting") {
     return {
@@ -79,7 +89,9 @@ export function LiveIndicator(): JSX.Element | null {
   const db = currentDb.value;
   if (!db) return null;
   const info = dbInfo.value ?? databases.value.find((d) => d.name === db) ?? null;
-  const live = describeLive(info, connection.value, meta.value?.pollIntervalMs ?? 15_000);
+  const since = disconnectedSince.value;
+  const offline = since === null ? 0 : Math.max(0, Math.round((now.value - since) / 1000));
+  const live = describeLive(info, connection.value, meta.value?.pollIntervalMs ?? 15_000, offline);
   const lang = locale.value;
   const when = info?.lastSyncAt
     ? t("live.lastSync", { when: formatRelative(info.lastSyncAt, now.value, lang) })
@@ -98,6 +110,8 @@ export function LiveIndicator(): JSX.Element | null {
       data-mode={live.mode}
       data-testid="live-indicator"
       title={tooltip}
+      aria-live="polite"
+      aria-atomic="true"
       aria-label={`${live.label}. ${when}`}
     >
       <span class="live__dot" aria-hidden="true" />

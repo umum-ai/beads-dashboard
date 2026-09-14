@@ -20,3 +20,23 @@ export function writeStored(key: string, value: unknown): void {
     // storage unavailable: preferences simply do not persist
   }
 }
+
+/** sessionStorage counterpart (per tab, cleared when the tab closes), same prefix and guards. */
+export function readSession<T>(key: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_PREFIX + key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeSession(key: string, value: unknown): void {
+  try {
+    if (value === undefined || value === null) sessionStorage.removeItem(STORAGE_PREFIX + key);
+    else sessionStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+  } catch {
+    // storage unavailable
+  }
+}

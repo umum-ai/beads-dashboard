@@ -76,7 +76,6 @@ export function GroupToggle({
 interface LaneHeaderProps {
   db: string;
   lane: Lane;
-  index: number;
   collapsed: boolean;
   progress: Progress | null;
   /** Label of the no-epic lane: "No epic" on the full board, "Directly in <id>" in a drill-down. */
@@ -88,7 +87,7 @@ interface LaneHeaderProps {
 }
 
 export function LaneHeader(props: LaneHeaderProps): JSX.Element {
-  const { db, lane, index, collapsed, progress } = props;
+  const { db, lane, collapsed, progress } = props;
   const epic = lane.epic;
   const name = epic ? epic.title : props.fallbackLabel;
   const count = lane.issues.length;
@@ -99,7 +98,6 @@ export function LaneHeader(props: LaneHeaderProps): JSX.Element {
     <header
       ref={ref}
       class={`lane-head${collapsed ? " lane-head--collapsed" : ""}${epic ? "" : " lane-head--loose"}${over ? " lane-head--over" : ""}`}
-      style={{ gridRow: laneHeaderRow(index) }}
       data-testid="lane"
       data-lane={lane.key}
       data-priority={epic ? clampPriority(epic.priority) : undefined}
@@ -186,6 +184,10 @@ export function LaneHeader(props: LaneHeaderProps): JSX.Element {
   );
 }
 
+/** Lane header row heights: `.lane-head` height + margins (`app.css`). */
+export const LANE_HEAD_PX = 48;
+export const LANE_HEAD_COLLAPSED_PX = 44;
+
 export interface SwimlaneBoardProps {
   db: string;
   columns: StatusDef[];
@@ -203,7 +205,11 @@ export function SwimlaneBoard(props: SwimlaneBoardProps): JSX.Element {
   const { db, columns, lanes } = props;
   const widths = columnWidths.value;
   const template = columns.map((c) => `${widths[c.name] ?? DEFAULT_COLUMN_WIDTH}px`).join(" ");
-  const rows = `auto ${lanes.map(() => "auto auto").join(" ")} auto`;
+  // Header rows get an explicit height: the lane header spans header + body rows (see
+  // LaneHeader), so nothing else would give the header row a size.
+  const rows = `auto ${lanes
+    .map((lane) => `${isLaneCollapsed(lane.key) ? LANE_HEAD_COLLAPSED_PX : LANE_HEAD_PX}px auto`)
+    .join(" ")} auto`;
 
   // cards per (status, lane), sharing the lane order of `lanes`
   const byLaneStatus = new Map<string, Map<string, BoardIssue[]>>();
@@ -244,17 +250,25 @@ export function SwimlaneBoard(props: SwimlaneBoardProps): JSX.Element {
         );
       })}
       {lanes.map((lane, index) => (
-        <LaneHeader
+        // The frame spans the lane's header + body rows and is the sticky header's containing
+        // block, so a header sticks only while its own lane is in view and is pushed out by the
+        // next lane instead of piling up under the column heads. It is transparent to the pointer.
+        <div
           key={lane.key}
-          db={db}
-          lane={lane}
-          index={index}
-          collapsed={isLaneCollapsed(lane.key)}
-          progress={lane.epic ? props.progressOf(lane.epic) : null}
-          fallbackLabel={props.fallbackLabel}
-          onOpen={lane.epic ? () => props.onOpenEpic((lane.epic as BoardIssue).id) : undefined}
-          parentId={props.parentIdOf(lane)}
-        />
+          class="lane-frame"
+          style={{ gridRow: `${laneHeaderRow(index)} / span 2` }}
+          data-testid="lane-frame"
+        >
+          <LaneHeader
+            db={db}
+            lane={lane}
+            collapsed={isLaneCollapsed(lane.key)}
+            progress={lane.epic ? props.progressOf(lane.epic) : null}
+            fallbackLabel={props.fallbackLabel}
+            onOpen={lane.epic ? () => props.onOpenEpic((lane.epic as BoardIssue).id) : undefined}
+            parentId={props.parentIdOf(lane)}
+          />
+        </div>
       ))}
     </div>
   );

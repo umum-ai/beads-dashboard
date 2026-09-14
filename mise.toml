@@ -82,3 +82,7 @@ run = "hadolint Dockerfile"
 [tasks."docker:smoke"]
 description = "Build the image and run it against a scratch stand (scripts/docker-smoke.sh)"
 run = "scripts/docker-smoke.sh"
+
+[tasks.screenshots]
+description = "README screenshots (docs/screenshots/board-{light,dark}.png) from the mock BFF, 1440x900"
+run = "bun scripts/screenshots.ts"

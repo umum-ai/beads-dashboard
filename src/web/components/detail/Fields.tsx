@@ -65,6 +65,8 @@ function TextField(props: {
   min?: number | undefined;
   testId: string;
   disabled?: boolean | undefined;
+  /** Accessible name (the row's `dt` is not associated with the control). */
+  label: string;
 }): JSX.Element {
   const [draft, setDraft] = useState(props.value);
   const [base, setBase] = useState(props.value);
@@ -83,6 +85,7 @@ function TextField(props: {
       value={draft}
       list={props.list}
       placeholder={props.placeholder ?? t("detail.empty")}
+      aria-label={props.label}
       disabled={props.disabled}
       data-testid={props.testId}
       onInput={(e) => setDraft((e.currentTarget as HTMLInputElement).value)}
@@ -108,6 +111,7 @@ function DateField(props: {
   onSave: (iso: string | null) => void;
   testId: string;
   disabled?: boolean | undefined;
+  label: string;
 }): JSX.Element {
   return (
     <span class="field-date">
@@ -115,6 +119,7 @@ function DateField(props: {
         class="field-inline"
         type="datetime-local"
         value={toLocalInput(props.value)}
+        aria-label={props.label}
         disabled={props.disabled}
         data-testid={props.testId}
         onChange={(e) => props.onSave(fromLocalInput((e.currentTarget as HTMLInputElement).value))}
@@ -197,6 +202,7 @@ export function Fields({
           class="field-select"
           value={status}
           disabled={busy}
+          aria-label={t("detail.field.status")}
           data-testid="detail-status-select"
           data-category={statuses.find((s) => s.name === status)?.category ?? "active"}
           onChange={(e) => void onStatus((e.currentTarget as HTMLSelectElement).value)}
@@ -216,6 +222,7 @@ export function Fields({
           class="field-select"
           value={currentType}
           disabled={busy}
+          aria-label={t("detail.field.type")}
           data-testid="detail-type-select"
           onChange={(e) =>
             void editor.save({ issue_type: (e.currentTarget as HTMLSelectElement).value })
@@ -237,6 +244,7 @@ export function Fields({
           value={String(priority)}
           disabled={busy}
           data-priority={priority}
+          aria-label={t("detail.field.priority")}
           data-testid="detail-priority-select"
           onChange={(e) =>
             void editor.save({ priority: Number((e.currentTarget as HTMLSelectElement).value) })
@@ -252,6 +260,7 @@ export function Fields({
       <Row label={t("detail.field.assignee")} testId="field-assignee">
         <span class="field-group">
           <TextField
+            label={t("detail.field.assignee")}
             value={d.assignee ?? ""}
             list="detail-assignees"
             placeholder={t("detail.assignee.none")}
@@ -328,6 +337,7 @@ export function Fields({
       </Row>
       <Row label={t("detail.field.due")}>
         <DateField
+          label={t("detail.field.due")}
           value={d.due_at}
           testId="detail-due"
           disabled={busy}
@@ -336,6 +346,7 @@ export function Fields({
       </Row>
       <Row label={t("detail.field.deferUntil")}>
         <DateField
+          label={t("detail.field.deferUntil")}
           value={d.defer_until}
           testId="detail-defer"
           disabled={busy}
@@ -345,6 +356,7 @@ export function Fields({
       <Row label={t("detail.field.estimate")}>
         <span class="field-group">
           <TextField
+            label={t("detail.field.estimate")}
             type="number"
             min={0}
             value={d.estimated_minutes ? String(d.estimated_minutes) : ""}
@@ -363,6 +375,7 @@ export function Fields({
       </Row>
       <Row label={t("detail.field.externalRef")}>
         <TextField
+          label={t("detail.field.externalRef")}
           mono
           value={d.external_ref ?? ""}
           testId="detail-external-ref"

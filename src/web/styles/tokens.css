@@ -11,8 +11,8 @@
   --surface-2: #f3f4f7;
   --surface-3: #e6e8ec;
   --ink: #1a1e25;
-  --ink-2: #545d6b;
-  --ink-3: #848d9b;
+  --ink-2: #4a5361;
+  --ink-3: #646b76;
   --line: #d7dbe1;
   --line-strong: #b4bcc7;
   --accent: #2b5bcc;
@@ -20,18 +20,22 @@
   --accent-soft: #e4ebfb;
   --focus: #2b5bcc;
 
-  --ok: #1e7f48;
+  --ok: #1d7a45;
   --ok-soft: #dcf2e4;
-  --warn: #a86a12;
+  --warn: #996010;
   --warn-soft: #fbeed6;
   --danger: #b8302c;
   --danger-soft: #fae1df;
+  /* text on a solid --danger fill (danger button, error toast) */
+  --danger-ink: #ffffff;
 
   --p0: #c1272d;
-  --p1: #d0691a;
-  --p2: #9a7b00;
+  --p1: #af5816;
+  --p2: #886c00;
   --p3: #3b6db0;
-  --p4: #7a8494;
+  --p4: #68707e;
+  /* text on a solid priority chip */
+  --pchip-ink: #ffffff;
 
   --cat-active: #2b5bcc;
   --cat-wip: #7e56c9;
@@ -77,7 +81,7 @@
   --surface-3: #2a303b;
   --ink: #e6e9ee;
   --ink-2: #a3acb9;
-  --ink-3: #6f7987;
+  --ink-3: #868e9a;
   --line: #2b313b;
   --line-strong: #3d4552;
   --accent: #8aa9ff;
@@ -91,12 +95,14 @@
   --warn-soft: #3a2c14;
   --danger: #ef6b66;
   --danger-soft: #3e1e1d;
+  --danger-ink: #1a0c0b;
 
   --p0: #f0645e;
   --p1: #f0924a;
   --p2: #d9bb3a;
   --p3: #6f9ee6;
   --p4: #8b95a5;
+  --pchip-ink: #0f1420;
 
   --cat-active: #8aa9ff;
   --cat-wip: #b28cf2;

@@ -101,6 +101,7 @@ export class DatabaseRuntime {
       projectId: null,
       versionWarning: null,
       capabilities: [],
+      lastError: null,
     };
     this.supervisor = new BdServeSupervisor({
       database: options.name,
@@ -109,7 +110,7 @@ export class DatabaseRuntime {
       dolt: options.dolt ?? doltConnection(options.config),
       log: options.log.child(`[bd:${options.name}]`),
       onReady: (ready) => this.onBdReady(ready.baseUrl, ready.context),
-      onDown: (down) => this.onBdDown(down.reason),
+      onDown: (down) => this.onBdDown(down.reason, down.exitCode, down.lastLine),
     });
   }
 
@@ -183,6 +184,9 @@ export class DatabaseRuntime {
     this.info.capabilities = [...context.capabilities];
     this.info.versionWarning = versionWarning(context.bd_version);
     if (this.info.versionWarning) this.log.warn(this.info.versionWarning, { database: this.name });
+    this.log.info(
+      `database ${this.name}: bd serve ${baseUrl.replace(/^http:\/\//, "")} (bd ${context.bd_version}), loading snapshot`,
+    );
     this.publishStatus();
     this.startLive(restarted);
     if (!this.pollTimer) {
@@ -191,14 +195,16 @@ export class DatabaseRuntime {
     }
   }
 
-  private onBdDown(reason: string): void {
+  private onBdDown(reason: string, exitCode: number | null, lastLine: string | null): void {
     if (this.stopped) return;
     this.stopLive();
     this.baseUrl = null;
     this.client = null;
     this.info.state = "down";
     this.info.live = "none";
-    this.log.warn("database is down", { database: this.name, reason });
+    const exit = exitCode === null ? "killed" : `exit ${exitCode}`;
+    this.info.lastError = `bd serve ${reason} (${exit})${lastLine ? `: ${lastLine}` : ""}`;
+    this.log.warn(`database ${this.name}: down — ${this.info.lastError}`, { database: this.name });
     this.publishStatus();
   }
 
@@ -258,10 +264,17 @@ export class DatabaseRuntime {
       if (this.stopped || this.client !== client) return;
       this.supervisor.noteDbOk();
       const prev = this.state;
+      const wasReady = this.info.state === "ready";
       this.state = next;
       this.info.state = "ready";
+      this.info.lastError = null;
       if (this.info.live !== "sse") this.info.live = "polling";
       this.info.lastSyncAt = new Date().toISOString();
+      if (!wasReady) {
+        this.log.info(
+          `database ${this.name}: ready — ${next.issues.size} issues, live ${this.info.live}`,
+        );
+      }
       const fresh = !prev || SNAPSHOT_REASONS.has(reason) || !dictionariesEqual(prev, next);
       if (fresh) {
         this.seq++;
@@ -283,7 +296,10 @@ export class DatabaseRuntime {
       if (this.stopped || this.client !== client) return;
       if (err instanceof ProblemError && err.status === 503) {
         this.supervisor.noteDbUnavailable();
-        if (this.state) this.info.state = "degraded";
+        if (this.state) {
+          this.info.state = "degraded";
+          this.info.lastError = `${err.code}: ${err.problem.detail ?? err.problem.title ?? err.message}`;
+        }
         this.log.warn("baseline failed: database unavailable", {
           database: this.name,
           code: err.code,

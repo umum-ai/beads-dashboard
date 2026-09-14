@@ -3,11 +3,12 @@
  * description. `POST issues` with the actor; on success the drawer opens on the new issue.
  */
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { t } from "../i18n/index.ts";
 import { api } from "../lib/api.ts";
 import type { CreateIssueBody } from "../lib/bff-types.ts";
 import { PRIORITIES } from "../lib/board.ts";
+import { trapFocus } from "../lib/focus-trap.ts";
 import { closeCreate, createRequest } from "../state/create.ts";
 import { actor } from "../state/meta.ts";
 import { navigate } from "../state/route.ts";
@@ -34,12 +35,19 @@ function CreateForm({
     status?: string | undefined;
     parent?: string | undefined;
     priority?: number | undefined;
+    type?: string | undefined;
   };
 }): JSX.Element {
   const statuses = board.value.statuses;
   const types = board.value.types.length ? board.value.types : ["task"];
   const [title, setTitle] = useState("");
-  const [type, setType] = useState(types.includes("task") ? "task" : (types[0] as string));
+  const [type, setType] = useState(
+    prefill.type && types.includes(prefill.type)
+      ? prefill.type
+      : types.includes("task")
+        ? "task"
+        : (types[0] as string),
+  );
   const [priority, setPriority] = useState(prefill.priority ?? 2);
   const [status, setStatus] = useState(prefill.status ?? "open");
   const [assignee, setAssignee] = useState("");
@@ -49,9 +57,10 @@ function CreateForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
-  useEffect(() => {
-    titleRef.current?.focus();
+  useLayoutEffect(() => {
+    const release = formRef.current ? trapFocus(formRef.current) : () => {};
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -60,7 +69,10 @@ function CreateForm({
       }
     };
     document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      release();
+    };
   }, []);
 
   const assignees = [...new Set(allIssues.value.map((r) => r.assignee).filter(Boolean))].sort();
@@ -106,6 +118,7 @@ function CreateForm({
         onClick={closeCreate}
       />
       <form
+        ref={formRef}
         class="modal__panel modal__panel--wide"
         role="dialog"
         aria-modal="true"

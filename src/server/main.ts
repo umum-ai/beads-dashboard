@@ -7,6 +7,7 @@ import { type App, createApp } from "./app.ts";
 import { type Config, ConfigError, loadConfig } from "./config.ts";
 import { DiscoveryError } from "./discovery.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { StartupError } from "./preflight.ts";
 
 declare global {
   var __bddbApp: App | undefined;
@@ -49,18 +50,31 @@ export async function startServer(options: StartOptions = {}): Promise<App> {
   return app;
 }
 
-/** Print a configuration/discovery failure the way the CLI does and return the exit code. */
-export function reportStartupError(err: unknown): number {
+/**
+ * Print a startup failure the way the CLI does and return the exit code: 2 for anything the
+ * operator can fix (configuration, dolt/discovery, bd binary — with hints like `bddb doctor`),
+ * 1 for an unexpected error (with its stack).
+ */
+export function reportStartupError(
+  err: unknown,
+  print: (line: string) => void = console.error,
+): number {
   if (err instanceof ConfigError) {
-    console.error(`bddb: ${err.message}`);
+    print(`bddb: ${err.message}`);
+    print("  → see `bddb help` and docs/configuration.md");
     return 2;
   }
-  if (err instanceof DiscoveryError) {
-    console.error(`bddb: ${err.message}`);
-    for (const hint of err.hints) console.error(`  → ${hint}`);
+  if (err instanceof DiscoveryError || err instanceof StartupError) {
+    print(`bddb: cannot start: ${err.message}`);
+    for (const hint of err.hints) print(`  → ${hint}`);
     return 2;
   }
-  console.error(`bddb: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  if (err instanceof Error && "code" in err && err.code === "EADDRINUSE") {
+    print(`bddb: cannot start: ${err.message}`);
+    print("  → another process listens on BDDB_HOST:BDDB_PORT; pick another --port or stop it");
+    return 2;
+  }
+  print(`bddb: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   return 1;
 }
 

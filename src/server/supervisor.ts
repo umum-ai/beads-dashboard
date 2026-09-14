@@ -24,7 +24,7 @@ export interface SupervisorOptions {
   /** A (re)started process answers `GET /v0/beads/context`. */
   onReady?: (info: { baseUrl: string; context: Context; pid: number }) => void;
   /** The process exited (or failed to start); a restart follows unless stopping. */
-  onDown?: (info: { exitCode: number | null; reason: string }) => void;
+  onDown?: (info: { exitCode: number | null; reason: string; lastLine: string | null }) => void;
   startupTimeoutMs?: number;
   backoffMinMs?: number;
   backoffMaxMs?: number;
@@ -319,7 +319,13 @@ export class BdServeSupervisor {
       reason,
       last: this.stopping ? undefined : this.lastLines.at(-1),
     });
-    if (!this.stopping) this.options.onDown?.({ exitCode, reason });
+    if (!this.stopping) {
+      // The most telling line: the last error-ish one, else the last non-request line.
+      const telling = this.lastLines.filter((l) => classifyBdLine(l) !== "debug");
+      const lastLine =
+        telling.filter((l) => classifyBdLine(l) === "warn").at(-1) ?? telling.at(-1) ?? null;
+      this.options.onDown?.({ exitCode, reason, lastLine });
+    }
     this.proc = null;
     return ready;
   }

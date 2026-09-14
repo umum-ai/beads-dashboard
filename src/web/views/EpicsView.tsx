@@ -10,7 +10,7 @@ import { typeLabel } from "../components/Card.tsx";
 import { statusLabel } from "../components/Column.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { ProgressBar } from "../components/Swimlane.tsx";
-import { Toolbar } from "../components/Toolbar.tsx";
+import { clearFilters, Toolbar } from "../components/Toolbar.tsx";
 import { t } from "../i18n/index.ts";
 import type { BoardIssue } from "../lib/bff-types.ts";
 import { clampPriority, doneStatuses } from "../lib/board.ts";
@@ -23,6 +23,7 @@ import {
   progressOf,
 } from "../lib/hierarchy.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
+import { openCreate } from "../state/create.ts";
 import { filters, hrefFor, hrefWith, navigate, onLinkClick } from "../state/route.ts";
 import { allIssues, board, boardDb, hierarchy } from "../state/snapshot.ts";
 
@@ -198,9 +199,34 @@ export function EpicsView({ db }: { db: string }): JSX.Element {
           </fieldset>
         </div>
         {epics.length === 0 ? (
-          <EmptyState title={t("epics.title")} body={t("epics.empty")} />
+          <EmptyState
+            title={t("epics.empty.title")}
+            body={t("epics.empty")}
+            action={{
+              label: t("epics.empty.create"),
+              onClick: () => openCreate({ type: "epic" }),
+              testId: "epics-empty-create",
+            }}
+            secondary={{
+              label: t("nav.board"),
+              onClick: () => navigate({ kind: "board", db }),
+            }}
+            testId="epics-empty"
+          />
         ) : shown.length === 0 ? (
-          <EmptyState title={t("epics.title")} body={t("epics.empty.filtered")} />
+          <EmptyState
+            title={t("board.empty.title")}
+            body={t("epics.empty.filtered")}
+            action={{
+              label: t("filters.clear"),
+              onClick: () => {
+                setStatus("");
+                clearFilters();
+              },
+              testId: "empty-clear-filters",
+            }}
+            testId="filter-empty"
+          />
         ) : (
           <ul class="erows" data-testid="epic-list">
             {shown.map((row) => (

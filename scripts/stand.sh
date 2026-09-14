@@ -29,8 +29,10 @@ DOLT="${BDDB_DOLT_PATH:-dolt}"
 
 DIR="${STAND_DIR:-.stand}"
 DOLT_PORT="${STAND_DOLT_PORT:-3399}"
+DOLT_PORT_GIVEN="${STAND_DOLT_PORT:+1}"
 DOLT_BIND="${STAND_DOLT_BIND:-127.0.0.1}"
 BD_PORT="${STAND_BD_PORT:-47313}"
+BD_PORT_GIVEN="${STAND_BD_PORT:+1}"
 PREFIX="${STAND_PREFIX:-kb}"
 DATABASE="${STAND_DATABASE:-}"
 PURGE=0
@@ -59,8 +61,8 @@ esac
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
-    --dolt-port) DOLT_PORT="$2"; shift 2 ;;
-    --bd-port) BD_PORT="$2"; shift 2 ;;
+    --dolt-port) DOLT_PORT="$2"; DOLT_PORT_GIVEN=1; shift 2 ;;
+    --bd-port) BD_PORT="$2"; BD_PORT_GIVEN=1; shift 2 ;;
     --prefix) PREFIX="$2"; shift 2 ;;
     --database) DATABASE="$2"; shift 2 ;;
     --purge) PURGE=1; shift ;;
@@ -73,6 +75,14 @@ done
 
 # Resolve DIR relative to repo root, make absolute.
 [[ "$DIR" = /* ]] || DIR="$REPO_ROOT/$DIR"
+# For down/status/seed/…: ports as `up` recorded them in stand.env, unless given again on the
+# command line or in the environment (a stand on 3799 must not be reported as 3399).
+if [[ "$CMD" != up && -f "$DIR/stand.env" ]]; then
+  [[ -n "$DOLT_PORT_GIVEN" ]] || DOLT_PORT="$(sed -n 's/^DOLT_PORT=//p' "$DIR/stand.env" | head -1)"
+  [[ -n "$BD_PORT_GIVEN" ]] || BD_PORT="$(sed -n 's/^BD_PORT=//p' "$DIR/stand.env" | head -1)"
+  DOLT_PORT="${DOLT_PORT:-3399}"
+  BD_PORT="${BD_PORT:-47313}"
+fi
 WS_DIR="$DIR/ws"
 DOLT_DATA="$DIR/dolt"
 DOLT_PID="$DIR/dolt.pid"

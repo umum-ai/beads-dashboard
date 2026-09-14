@@ -25,7 +25,7 @@ Conventions:
 | Method, path | Response |
 |---|---|
 | `GET /healthz` | `200 text/plain "ok"` — process is alive. |
-| `GET /readyz` | `200` when at least one database is `ready`, else `503`. Body: JSON `{ databases: { [name]: state } }`. |
+| `GET /readyz` | `200` when at least one database is `ready` or `degraded` (it has a snapshot to serve), else `503`. Body: JSON `{ databases: { [name]: state } }`. |
 | `GET /api/meta` | `Meta` (below). |
 
 ```ts
@@ -47,8 +47,18 @@ type DatabaseInfo = {
   projectId: string | null;
   versionWarning: string | null;       // set when bd_version major/minor differs from builtForBeads
   capabilities: string[];
+  lastError?: string | null;           // why the database is down/degraded (below); null while ready
 };
 ```
+
+`lastError` is the diagnostic the UI shows in its "down" / "degraded" states and banners:
+for `down` it is `bd serve <reason> (exit N | killed): <last telling line of bd serve output>`
+(the reason is the supervisor's — `process exited`, `failed to start`, or a restart cause such as
+`db_unavailable persisted while dolt is reachable (proxy dead?)`); for `degraded` it is
+`<code>: <detail>` of the upstream `503` problem (`db_unavailable: database temporarily
+unavailable; retry`). It is cleared (`null`) by the next successful baseline. A database is
+`ready` again within seconds of its `bd serve` dying (restart with backoff 1 s → 30 s); a dead
+`db-proxy-child` keeps it `degraded` for about a minute until the supervisor restarts both.
 
 ## Per-database snapshot
 
@@ -126,7 +136,16 @@ type Delta = {
 
 The client keeps the snapshot in memory and applies deltas. There is no `since` parameter:
 reconnecting always yields a fresh `snapshot` frame. Every browser tab opens exactly one
-stream per database it displays. `id:` fields are not used.
+stream per database it displays. `id:` fields are not used. The stream starts with
+`retry: 3000` (the browser's reconnect delay after a network failure).
+
+While the database is `starting` or `down` the stream is **refused** with `503 bddb_not_ready`
+(`Retry-After: 2`), which makes `EventSource` give up (`readyState CLOSED`); the SPA then
+probes `GET /api/meta` — reachable: the database is the problem, its `state`/`lastError` are
+shown and the stream is reopened with a backoff of 2 s → 15 s; unreachable: the header turns
+"Disconnected — retrying" and, after 10 s, a banner says the dashboard server is gone. A stream
+that was already open survives a `bd serve` restart: the client receives `status` frames
+(`down`, then `ready`) and a fresh `snapshot`.
 
 ## Per-database read proxies
 

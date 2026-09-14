@@ -5,6 +5,7 @@ import { t } from "../i18n/index.ts";
 import { PRIORITIES } from "../lib/board.ts";
 import { EMPTY_FILTERS, isFilterEmpty } from "../lib/filters.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
+import { QUICK_FILTER_ID } from "../lib/keyboard.ts";
 import { filters, setFilters, updateFilters } from "../state/route.ts";
 import { typeLabel } from "./Card.tsx";
 import { Popover } from "./Popover.tsx";
@@ -65,6 +66,12 @@ function TypeFilter({ types }: { types: string[] }): JSX.Element {
   );
 }
 
+/** Drop the quick filters, keep the drill-down and the query expression. */
+export function clearFilters(): void {
+  const f = filters.value;
+  setFilters({ ...EMPTY_FILTERS, epic: f.epic, query: f.query });
+}
+
 export function Toolbar(props: ToolbarProps): JSX.Element {
   const f = filters.value;
   const assignees = [...new Set([...props.assignees, ...(f.assignee ? [f.assignee] : [])])].sort();
@@ -72,9 +79,11 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
   return (
     <search class="toolbar" data-testid="toolbar">
       <input
+        id={QUICK_FILTER_ID}
         class="input toolbar__search"
         type="search"
         value={f.q}
+        title={t("filters.search.help")}
         placeholder={t("filters.search")}
         aria-label={t("filters.search")}
         data-testid="filter-text"
@@ -134,7 +143,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           type="button"
           class="btn btn--ghost"
           data-testid="filters-clear"
-          onClick={() => setFilters({ ...EMPTY_FILTERS, epic: f.epic, query: f.query })}
+          onClick={() => clearFilters()}
         >
           {t("filters.clear")}
         </button>

@@ -24,6 +24,11 @@ export interface DatabaseInfo {
   projectId: string | null;
   versionWarning: string | null;
   capabilities: string[];
+  /**
+   * Why the database is `down` / `degraded`: the supervisor's exit reason plus the last line
+   * `bd serve` printed, or the upstream problem detail. `null` while `ready`.
+   */
+  lastError?: string | null;
 }
 
 export interface Meta {

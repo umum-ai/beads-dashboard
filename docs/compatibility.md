@@ -3,9 +3,11 @@
 bddb talks to `bd serve` (beads ≥ 1.3.0) and ships one `bd` inside its image. The `bd` in the
 image, the `bd` your agents use and the bddb release must agree on the beads **minor** version:
 `bd serve` and the CLI share the schema of your Dolt databases, and bddb's `spec/openapi.v0.yaml`
-is a pinned copy of that release's API. Patch releases are fine; a different minor produces a
-warning in the log and in the header of the UI (`versionWarning` in `/api/meta`), a different
-major is unsupported.
+is a pinned copy of that release's API. Patch releases are fine. A **newer** minor produces a
+warning in the log and a banner in the UI (`versionWarning` in `/api/meta`; the banner explains
+the schema risk, links here and can be dismissed for the tab). An **older** minor (no `bd serve`
+before 1.3.0) or a different major makes `bddb serve` refuse to start with exit code 2
+(`docs/configuration.md`, "Startup failures").
 
 ## Matrix
 
@@ -61,7 +63,13 @@ The version appears in four places; `scripts/check-pins.sh` (run by CI in both t
 
 Renovate also tracks `bun` (mise pin + `oven/bun` base images, grouped), `dolt` (`aqua:dolthub/dolt`
 in mise.toml; only the stand and the CI contract job use it), the base-image digests, npm
-dependencies and GitHub Actions.
+dependencies and GitHub Actions. Everything but beads releases and vulnerability alerts runs on
+a weekly schedule (Monday, before 6 am). Only one group automerges (`platformAutomerge`, so
+GitHub merges it when the required checks pass): minor/patch bumps of the tooling
+devDependencies (typescript, `@types/bun`, openapi-typescript) — they are fully exercised by
+the CI `check` job. Playwright and axe are never automerged because CI does not run the e2e
+suite; runtime dependencies are grouped for a review by hand. Automerge needs branch
+protection on `main` with the `check`, `contract` and `docker` jobs required.
 
 ## Runtime requirements
 

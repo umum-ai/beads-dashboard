@@ -1,6 +1,6 @@
 /** UI preferences persisted in localStorage (`bddb.*`): theme, actor, column widths, sections, lanes. */
 import { effect, signal } from "@preact/signals";
-import { readStored, writeStored } from "../lib/storage.ts";
+import { readSession, readStored, writeSession, writeStored } from "../lib/storage.ts";
 
 export type Theme = "light" | "dark";
 
@@ -72,13 +72,14 @@ export function isSectionCollapsed(status: string, priority: number): boolean {
   return collapsedSections.value[`${status}:${priority}`] === true;
 }
 
+/** Version-mismatch banner dismissed for this tab only (sessionStorage): it comes back next visit. */
 export const dismissedVersionWarning = signal<string | null>(
-  readStored<string | null>("dismissedVersionWarning", null),
+  readSession<string | null>("dismissedVersionWarning", null),
 );
 
 export function dismissVersionWarning(text: string): void {
   dismissedVersionWarning.value = text;
-  writeStored("dismissedVersionWarning", text);
+  writeSession("dismissedVersionWarning", text);
 }
 
 /** Board grouping: swimlanes per top epic (default) or the flat board. */

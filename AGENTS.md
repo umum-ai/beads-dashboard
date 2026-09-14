@@ -34,6 +34,7 @@ mise run check:pins     # beads version agrees in mise.toml, Dockerfile, version
 mise run docker:lint    # hadolint Dockerfile
 mise run docker:build   # docker build with BEADS_VERSION from mise.toml
 mise run docker:smoke   # build the image and run it against a scratch stand (scripts/docker-smoke.sh)
+mise run screenshots    # docs/screenshots/board-{light,dark}.png from the mock (README images, ≤ 300 KB each)
 ```
 
 Acceptance for any change: `mise run lint && mise run typecheck && mise run test && mise run
@@ -68,17 +69,18 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 
 | Path | Contents |
 |---|---|
-| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals), `app.ts` (routes), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `types.ts` (wire types of docs/bff-api.md) |
-| `src/web/` | Preact SPA (`index.html`, `main.tsx`) |
+| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals, startup error reporting: exit 2 with hints for config / discovery / preflight, 1 otherwise), `preflight.ts` (`bd` present and supported before anything starts), `app.ts` (routes, startup log lines), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime, `DatabaseInfo.lastError`), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `types.ts` (wire types of docs/bff-api.md) |
+| `src/web/` | Preact SPA (`index.html`, `main.tsx`); layout in `docs/ui.md`. Keyboard: `lib/keyboard.ts` (pure) + `lib/board-keys.ts`; dialogs use `lib/focus-trap.ts`; states in `components/EmptyState.tsx`, `StatusBanners.tsx`; `lib/contrast.ts` backs the WCAG unit test |
 | `src/api-client/` | Types generated from the spec, HTTP client, Problem handling, capability gating |
 | `spec/openapi.v0.yaml` | Pinned copy of the `bd serve` OpenAPI spec for the supported beads version. Source of truth for the contract; never hand-edit |
-| `tests/unit/` | `bun test` unit tests |
-| `tests/contract/` | Tests against a real `bd serve` + `dolt sql-server` |
+| `tests/unit/` | `bun test` unit tests, including `web/contrast.test.ts` (AA for every text/background pair of `tokens.css`, both themes), `web/keyboard.test.ts`, `server/config-docs.test.ts` (`BDDB_*` in config.ts ↔ docs/configuration.md ↔ README), `server/preflight.test.ts` |
+| `tests/contract/` | Tests against a real `bd serve` + `dolt sql-server`: `bd-serve.test.ts` (api-client), `bff.test.ts` (bddb as a child process), `bff-resilience.test.ts` (kill `bd serve` → `down` → `ready`; kill the db-proxy → `degraded`) |
+| `tests/e2e/` | Playwright: `board`, `epics`, `edit`, `a11y` (keyboard, focus traps, simulated server states via `page.route`, axe), `live` (real only); `helpers.ts` |
 | `Dockerfile`, `.dockerignore`, `docker/bddb` | Multi-stage image (bd download + checksum, bun build, `oven/bun:1.4-slim` runtime); `docker/bddb` is the entry-point wrapper |
 | `docker-compose.example.yml` | Compose example with the commented env block |
-| `scripts/` | `stand.sh` (scratch dolt + bd serve), `dev.sh`, `gen-api.sh`, `build-web.sh`, `build-server.sh`, `build-binary.sh`, `check-pins.sh`, `docker-smoke.sh` |
+| `scripts/` | `stand.sh` (scratch dolt + bd serve; `status`/`down` read the ports `up` recorded in `stand.env`), `dev.sh`, `gen-api.sh`, `build-web.sh`, `build-server.sh`, `build-binary.sh`, `check-pins.sh`, `docker-smoke.sh`, `screenshots.ts` |
 | `dist/` | Build output (git-ignored): `web/`, `server/`, `bddb-<os>-<arch>` |
-| `docs/` | topology, configuration, bff-api, api-client, ui, host-setup, deployment, compatibility |
+| `docs/` | `README.md` (index), topology, configuration, bff-api, api-client, ui, host-setup, deployment, compatibility, `screenshots/` (README PNGs) |
 | `.github/workflows/` | `ci.yml` (lint, typecheck, unit, build, pins, contract matrix, hadolint + image build), `docker.yml` (GHCR, amd64+arm64), `release.yml` (release-please, binaries) |
 | `release-please-config.json`, `.release-please-manifest.json` | release-please (node type, tags `vX.Y.Z`, first release 0.1.0) |
 
@@ -99,6 +101,15 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 - If the plan or docs contradict observed `bd` behavior, `bd` is right: verify with a command
   and fix the document.
 - Do not commit `tmp/`. Do not commit secrets. Keep `bun.lock` in sync (`bun install`).
+- UI rules (details in `docs/ui.md`): every string through `t()` in both `en.json` and
+  `ru.json`; every icon-only button has `aria-label`; every new mouse interaction has a
+  keyboard path (cards: Enter / Space / arrows; dialogs: `trapFocus`, Escape, focus back to the
+  opener); every new colour pairing gets a row in `tests/unit/web/contrast.test.ts`; an empty
+  or error state names the cause and offers the one action that changes it (`EmptyState`).
+- A new `BDDB_*` variable goes into `config.ts`, `docs/configuration.md` and the README table
+  together (`tests/unit/server/config-docs.test.ts` fails otherwise). Startup problems the
+  operator can fix throw `ConfigError` / `DiscoveryError` / `StartupError` with hints and exit 2;
+  never start with every database `down`.
 
 ## Build and release
 

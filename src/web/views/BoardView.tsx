@@ -9,8 +9,9 @@ import { Breadcrumbs, type Crumb } from "../components/Breadcrumbs.tsx";
 import { Column } from "../components/Column.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { QueryBar, QueryToggle } from "../components/QueryBar.tsx";
+import { databaseHints } from "../components/StatusBanners.tsx";
 import { GroupToggle, ProgressBar, SwimlaneBoard } from "../components/Swimlane.tsx";
-import { Toolbar } from "../components/Toolbar.tsx";
+import { clearFilters, Toolbar } from "../components/Toolbar.tsx";
 import { t } from "../i18n/index.ts";
 import { loadAllClosed } from "../lib/api.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
@@ -94,18 +95,35 @@ export function BoardView({ db }: { db: string }): JSX.Element {
   });
 
   if (!hasData) {
-    const starting = info?.state === "starting" || isRetryable(boardError.value);
-    if (boardError.value && !starting) {
+    const retry = { label: t("state.retry"), onClick: () => void refetchSnapshot(db) };
+    if (info?.state === "down") {
       return (
         <EmptyState
-          title={t("error.network_error")}
-          body={describeError(boardError.value)}
-          action={{ label: t("state.retry"), onClick: () => void refetchSnapshot(db) }}
-          testId="board-error"
+          tone="danger"
+          title={t("state.down.title", { db })}
+          body={t("state.down.body")}
+          detail={info.lastError ?? undefined}
+          hints={databaseHints("down")}
+          action={retry}
+          testId="db-down"
         />
       );
     }
-    if (starting && info?.state !== "down") {
+    if (info?.state === "degraded") {
+      return (
+        <EmptyState
+          tone="warn"
+          title={t("state.degraded.title", { db })}
+          body={t("state.degraded.body")}
+          detail={info.lastError ?? undefined}
+          hints={databaseHints("degraded")}
+          action={retry}
+          testId="db-degraded"
+        />
+      );
+    }
+    const starting = info?.state === "starting" || isRetryable(boardError.value);
+    if (starting) {
       return (
         <EmptyState
           loading
@@ -115,13 +133,14 @@ export function BoardView({ db }: { db: string }): JSX.Element {
         />
       );
     }
-    if (info?.state === "down") {
+    if (boardError.value) {
       return (
         <EmptyState
-          title={t("state.down.title", { db })}
-          body={t("state.down.body")}
-          action={{ label: t("state.retry"), onClick: () => void refetchSnapshot(db) }}
-          testId="db-down"
+          tone="danger"
+          title={t("error.network_error")}
+          body={describeError(boardError.value)}
+          action={retry}
+          testId="board-error"
         />
       );
     }
@@ -238,20 +257,58 @@ export function BoardView({ db }: { db: string }): JSX.Element {
       ) : null}
       {inQuery && total === 0 ? (
         <EmptyState
-          title={t("board.empty.title")}
-          body={queryLoading.value ? t("query.running") : t("query.empty")}
+          loading={queryLoading.value}
+          title={queryLoading.value ? t("query.running") : t("query.empty.title")}
+          body={queryLoading.value ? undefined : t("query.empty")}
+          action={
+            queryLoading.value
+              ? undefined
+              : {
+                  label: t("query.clear"),
+                  onClick: () => updateFilters({ query: "" }),
+                  testId: "query-empty-clear",
+                }
+          }
           testId="query-empty"
         />
       ) : total === 0 ? (
-        <EmptyState title={t("board.empty.title")} body={t("board.empty.none")} />
+        <EmptyState
+          title={t("board.empty.none.title")}
+          body={t("board.empty.none")}
+          action={{
+            label: t("board.empty.create"),
+            onClick: () => openCreate({}),
+            testId: "board-empty-create",
+          }}
+          testId="board-empty"
+        />
       ) : epicId && scoped.length === 0 ? (
         <EmptyState
           title={t("board.empty.title")}
           body={filtered ? t("board.empty.filtered") : t("board.drill.empty")}
-          action={{ label: t("board.crumbs.all"), onClick: () => updateFilters({ epic: "" }) }}
+          action={
+            filtered
+              ? { label: t("filters.clear"), onClick: clearFilters, testId: "empty-clear-filters" }
+              : {
+                  label: t("board.drill.create"),
+                  onClick: () => openCreate({ parent: epicId }),
+                  testId: "drill-empty-create",
+                }
+          }
+          secondary={{ label: t("board.crumbs.all"), onClick: () => updateFilters({ epic: "" }) }}
+          testId="drill-empty"
         />
       ) : filtered && scoped.length === 0 ? (
-        <EmptyState title={t("board.empty.title")} body={t("board.empty.filtered")} />
+        <EmptyState
+          title={t("board.empty.title")}
+          body={t("board.empty.filtered")}
+          action={{
+            label: t("filters.clear"),
+            onClick: clearFilters,
+            testId: "empty-clear-filters",
+          }}
+          testId="filter-empty"
+        />
       ) : lanes ? (
         <SwimlaneBoard
           db={db}

@@ -7,6 +7,7 @@ import { actorPref, setActor, theme, toggleTheme } from "../state/prefs.ts";
 import { currentDb, hrefFor, navigate, onLinkClick, route } from "../state/route.ts";
 import { LiveIndicator } from "./LiveIndicator.tsx";
 import { Popover } from "./Popover.tsx";
+import { toggleHelp } from "./ShortcutsHelp.tsx";
 
 function SunIcon(): JSX.Element {
   return (
@@ -215,6 +216,16 @@ export function Header(): JSX.Element {
           onClick={toggleLanguage}
         >
           {lang.toUpperCase()}
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          aria-label={t("help.title")}
+          title={t("help.title.hint")}
+          data-testid="help-button"
+          onClick={toggleHelp}
+        >
+          <span aria-hidden="true">?</span>
         </button>
         <button
           type="button"

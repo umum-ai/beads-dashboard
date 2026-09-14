@@ -6,11 +6,14 @@
 import type { ComponentChildren, JSX } from "preact";
 import { createPortal } from "preact/compat";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { noteFocusOrigin } from "../lib/focus-trap.ts";
 
 export interface MenuProps {
   open: boolean;
   onClose: () => void;
   anchor: RefObjectLike;
+  /** Element focus returns to when the menu closes (default: the anchor). */
+  restoreTo?: RefObjectLike | undefined;
   label: string;
   testId?: string | undefined;
   children: ComponentChildren;
@@ -22,7 +25,7 @@ export interface RefObjectLike {
 }
 
 export function Menu(props: MenuProps): JSX.Element | null {
-  const { open, onClose, anchor } = props;
+  const { open, onClose, anchor, restoreTo } = props;
   const panel = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -50,7 +53,6 @@ export function Menu(props: MenuProps): JSX.Element | null {
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
-        anchor.current?.focus();
         return;
       }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -67,12 +69,24 @@ export function Menu(props: MenuProps): JSX.Element | null {
     };
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey, true);
-    panel.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    const panelEl = panel.current;
     return () => {
       document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("keydown", onKey, true);
+      // Focus went into the portal; give it back to the card (or the trigger) on close. When a
+      // dialog opened from an item already holds focus, leave it there and let the dialog
+      // return to the same origin when it closes.
+      const origin = restoreTo?.current ?? anchor.current;
+      const active = document.activeElement;
+      if (!active || active === document.body || panelEl?.contains(active)) origin?.focus();
+      else noteFocusOrigin(origin);
     };
-  }, [open, onClose, anchor]);
+  }, [open, onClose, anchor, restoreTo]);
+
+  // Focus the first item once the panel is positioned (a `visibility: hidden` panel cannot take focus).
+  useEffect(() => {
+    if (open && pos) panel.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }, [open, pos]);
 
   if (!open || typeof document === "undefined") return null;
   return createPortal(

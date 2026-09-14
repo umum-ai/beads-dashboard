@@ -13,6 +13,7 @@ import { t } from "../i18n/index.ts";
 import { ApiError, api } from "../lib/api.ts";
 import type { BoardIssue, IssueDetails } from "../lib/bff-types.ts";
 import { clampPriority, compareCards } from "../lib/board.ts";
+import { focusCard } from "../lib/board-keys.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
 import { navigate } from "../state/route.ts";
 import { board, childrenOf } from "../state/snapshot.ts";
@@ -110,7 +111,11 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
   const lastStamp = useRef<string | null>(null);
   const pendingReload = useRef(false);
 
-  const close = () => navigate({ kind: "board", db });
+  // Closing gives focus back to the card that opened the drawer (it is the board's keyboard stop).
+  const close = () => {
+    navigate({ kind: "board", db });
+    setTimeout(() => focusCard(id), 0);
+  };
 
   const load = useCallback(
     (silent = false) => {
@@ -236,9 +241,14 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
           ) : null}
           {!d && error ? (
             <EmptyState
-              title={notFound ? t("detail.notFound", { id }) : t("error.generic", { detail: "" })}
-              body={notFound ? undefined : describeError(error)}
-              action={{ label: t("state.retry"), onClick: () => load() }}
+              title={notFound ? t("detail.notFound", { id }) : t("detail.loadFailed")}
+              body={notFound ? t("detail.notFound.body") : describeError(error)}
+              action={
+                notFound
+                  ? { label: t("detail.backToBoard"), onClick: close, testId: "detail-back" }
+                  : { label: t("state.retry"), onClick: () => load() }
+              }
+              secondary={notFound ? undefined : { label: t("detail.backToBoard"), onClick: close }}
               testId="detail-error"
             />
           ) : null}

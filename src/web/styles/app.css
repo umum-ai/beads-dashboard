@@ -226,12 +226,8 @@ a:hover {
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.02em;
-  color: #fff;
+  color: var(--pchip-ink);
   background: var(--p-color, var(--p4));
-}
-
-:root[data-theme="dark"] .pchip {
-  color: #0f1420;
 }
 
 .pchip--outline {
@@ -582,11 +578,7 @@ a:hover {
 
 .pfilter__btn[aria-pressed="true"] {
   background: var(--p-color);
-  color: #fff;
-}
-
-:root[data-theme="dark"] .pfilter__btn[aria-pressed="true"] {
-  color: #0f1420;
+  color: var(--pchip-ink);
 }
 
 .toolbar__count {
@@ -1283,7 +1275,7 @@ a:hover {
 
 .toast--error {
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
 .toast--success {
@@ -1427,16 +1419,22 @@ a:hover {
   background: transparent;
 }
 
-.lane-head {
+/* one frame per lane (header row + body row): the containing block of the sticky header */
+.lane-frame {
   grid-column: 1 / -1;
-  align-self: start;
+  z-index: 2;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.lane-head {
   position: sticky;
   top: 38px;
-  z-index: 2;
   height: 36px;
   margin: var(--s-2) 0 var(--s-1);
   background: var(--canvas);
   min-width: 0;
+  pointer-events: auto;
 }
 
 /* the content strip sticks to the left edge while the wide grid scrolls horizontally */
@@ -2137,7 +2135,7 @@ a:hover {
 .btn--danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--danger-ink);
 }
 
 /* form fields (create modal) */
@@ -2649,4 +2647,149 @@ a:hover {
   height: 22px;
   flex: none;
   color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------------ stage 7: a11y, states, banners */
+
+/* the card is the board's keyboard stop: a ring that survives the column's overflow clipping */
+.card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+  box-shadow: 0 0 0 4px var(--surface-2);
+}
+
+.spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  margin-bottom: var(--s-3);
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    border-top-color: var(--line-strong);
+    border-right-color: var(--accent);
+  }
+}
+
+.state--danger .state__title {
+  color: var(--danger);
+}
+
+.state--warn .state__title {
+  color: var(--warn);
+}
+
+.state__hints {
+  margin: 0 0 var(--s-4);
+  padding: 0 0 0 1.1em;
+  text-align: left;
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.state__hints li + li {
+  margin-top: var(--s-1);
+}
+
+.state__actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--s-2);
+}
+
+.banner--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.banner--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.banner__text a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.banner__hint {
+  opacity: 0.85;
+}
+
+.banner__code {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  opacity: 0.9;
+  overflow-wrap: anywhere;
+}
+
+/* keyboard help */
+
+.modal__panel--help {
+  width: min(560px, calc(100vw - 2 * var(--s-4)));
+}
+
+.help {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.help__h {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.help__list {
+  margin: 0;
+  display: grid;
+  gap: var(--s-1);
+}
+
+.help__row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: var(--s-3);
+  align-items: baseline;
+}
+
+.help__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.help__label {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  line-height: 16px;
+  text-align: center;
+  color: var(--ink);
 }

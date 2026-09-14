@@ -5,6 +5,7 @@ export interface CreatePrefill {
   status?: string | undefined;
   parent?: string | undefined;
   priority?: number | undefined;
+  type?: string | undefined;
 }
 
 export const createRequest = signal<CreatePrefill | null>(null);

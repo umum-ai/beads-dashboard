@@ -100,6 +100,7 @@ function dbInfo(db: FixtureDb): DatabaseInfo {
     projectId: `${db.prefix}-project`,
     versionWarning: process.env.MOCK_VERSION_WARNING ?? null,
     capabilities: ["events.watch", "issues.query", "dependencies.tree"],
+    lastError: null,
   };
 }
 
