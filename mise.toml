@@ -71,6 +71,10 @@ run = "scripts/build-binary.sh"
 description = "mise.toml, Dockerfile, version.ts and the CI matrix agree on the beads version"
 run = "scripts/check-pins.sh"
 
+[tasks."release:check"]
+description = "Tag vX.Y.Z equals package.json version (run before tagging): mise run release:check -- v0.1.0"
+run = "scripts/release-check.sh"
+
 [tasks."docker:build"]
 description = "Build the container image with BEADS_VERSION from mise.toml"
 run = 'docker build --build-arg "BEADS_VERSION=$(scripts/check-pins.sh --print)" -t bddb .'

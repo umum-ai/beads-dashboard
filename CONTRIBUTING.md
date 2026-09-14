@@ -49,9 +49,8 @@ mise run contract            # when src/server or src/api-client changed
 ```
 
 - Use [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`,
-  `chore:`, `ci:`, `refactor:`, `test:`). Release notes and the version bump are generated
-  from them by release-please; a `feat!:` / `BREAKING CHANGE:` footer bumps the minor while we
-  are on `0.x`.
+  `chore:`, `ci:`, `refactor:`, `test:`). GitHub's generated release notes list the merged PRs;
+  the version is bumped by hand in the release commit (see "Releasing").
 - Formatting and linting are biome (`mise run lint:fix`); no ESLint or Prettier.
 - `spec/openapi.v0.yaml` is a pinned copy of the `bd serve` spec and `src/api-client/generated`
   is generated from it (`mise run gen:api`); never hand-edit either. If the plan or a document
@@ -69,6 +68,30 @@ PR checklist:
 - [ ] strings in both languages; icon-only buttons have `aria-label`; keyboard path exists for
       any new mouse-only interaction
 - [ ] conventional commit messages; no `tmp/`, secrets or stand directories in the diff
+
+## Releasing
+
+Releases happen only on a pushed git tag — never on a push to `main`. Only the owner tags.
+
+```sh
+# 1. bump the version and land it on main (through a PR, or directly by the owner)
+sed -i 's/"version": ".*"/"version": "0.1.0"/' package.json
+git commit -am "chore(release): 0.1.0" && git push
+# 2. tag that commit; the tag must equal package.json (scripts/release-check.sh checks it)
+mise run release:check -- v0.1.0
+git tag -a v0.1.0 -m "bddb 0.1.0" && git push origin v0.1.0
+```
+
+The tag `vX.Y.Z` triggers two workflows:
+
+- `release.yml` — `verify` (tag == `package.json`, pins, lint, typecheck, unit tests), then the
+  four binaries (`bddb-<version>-{linux,darwin}-{x64,arm64}.tar.gz` + `.sha256`), then a GitHub
+  release "bddb X.Y.Z" with generated notes, the archives and `SHA256SUMS`. `0.x` and `-rc`
+  versions are marked pre-release. Re-running (workflow_dispatch with the tag) replaces the assets.
+- `docker.yml` — the image `ghcr.io/umum-ai/bddb` for amd64 + arm64 with tags `X.Y.Z`, `X.Y`, `X`
+  (so `0.1.0`, `0.1`, `0`), `latest` (not for a `-rc`), `sha-<short>`.
+
+Pushes to `main` and pull requests build the image but publish nothing.
 
 ## Reporting issues
 

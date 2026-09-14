@@ -11,11 +11,14 @@ database ([topology](topology.md)). Embedded-mode workspaces are not supported
 
 ## Image
 
+Images are published only from a release tag `vX.Y.Z` (nothing is pushed from `main`):
+
 ```text
-ghcr.io/umum-ai/bddb:latest      last release on main
-ghcr.io/umum-ai/bddb:0.1         latest 0.1.x
+ghcr.io/umum-ai/bddb:latest      newest release (not moved by -rc / -beta versions)
+ghcr.io/umum-ai/bddb:0           newest 0.x
+ghcr.io/umum-ai/bddb:0.1         newest 0.1.x
 ghcr.io/umum-ai/bddb:0.1.0       exact release
-ghcr.io/umum-ai/bddb:sha-<7>     every commit on main
+ghcr.io/umum-ai/bddb:sha-<7>     the release's commit
 ```
 
 Contents: `oven/bun:1.4-slim` (Debian bookworm) + `git` + `ca-certificates` + `/usr/local/bin/bd`
@@ -133,9 +136,10 @@ front of it. Anyone who reaches bddb can read and edit every served database.
 
 ## Single binary
 
-Releases carry `bddb-<version>-<os>-<arch>.tar.gz` for `linux-x64`, `linux-arm64`,
-`darwin-x64`, `darwin-arm64`, each with a `.sha256`, plus one `SHA256SUMS`. The archive holds one
-executable, `bddb-<os>-<arch>` (~80 MB — it embeds the bun runtime and the SPA).
+Every release tag `vX.Y.Z` carries `bddb-<version>-<os>-<arch>.tar.gz` for `linux-x64`,
+`linux-arm64`, `darwin-x64`, `darwin-arm64`, each with a `.sha256`, plus one `SHA256SUMS`. The
+archive holds one executable, `bddb-<os>-<arch>` (~80 MB — it embeds the bun runtime and the SPA);
+`bddb version` prints the release version.
 
 ```sh
 curl -fsSLO https://github.com/umum-ai/beads-dashboard/releases/download/v0.1.0/bddb-0.1.0-linux-x64.tar.gz

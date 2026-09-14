@@ -10,6 +10,8 @@
 #   docker run --rm --add-host=host.docker.internal:host-gateway bddb doctor
 #
 # BEADS_VERSION must equal the `github:gastownhall/beads` pin in mise.toml (scripts/check-pins.sh).
+# BDDB_VERSION only feeds the org.opencontainers.image.version label (docker.yml passes the tag's
+# version); `bddb version` itself prints package.json's version, which is inlined into the bundle.
 ARG BEADS_VERSION=1.3.0-rc.2
 ARG BDDB_VERSION=0.0.0-dev
 

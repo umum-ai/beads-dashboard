@@ -65,6 +65,7 @@ docker run --rm -p 7331:7331 \
 - Dolt must listen on `0.0.0.0` and have a user allowed from remote hosts (`CREATE USER 'root'@'%'`): [docs/host-setup.md](docs/host-setup.md).
 - Linux alternative: `--network host` with `-e BDDB_DOLT_HOST=127.0.0.1`; Dolt stays on loopback.
 - Compose: [`docker-compose.example.yml`](docker-compose.example.yml).
+- Image tags: `latest`, `0`, `0.1`, `0.1.0`, `sha-<7>` — published only from release tags ([docs/deployment.md](docs/deployment.md)).
 
 **Warning.** A password-less Dolt on `0.0.0.0` exposes all of its data to the network, and the
 dashboard itself has no authentication — put both behind your network or a reverse proxy.

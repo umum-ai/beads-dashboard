@@ -1,15 +1,22 @@
 name: Docker
 
-# Multi-arch image → ghcr.io/umum-ai/bddb. Pull requests only build (no push, no registry login).
-# Tags: sha-<short> always; on main also `latest`; on a `vX.Y.Z` tag also `X.Y.Z` and `X.Y`.
-# BEADS_VERSION comes from the mise.toml pin (scripts/check-pins.sh --print) — one source of truth.
-# release.yml starts this workflow on the release tag through workflow_dispatch (a tag created with
-# GITHUB_TOKEN does not fire `push: tags`).
+# Multi-arch image (amd64, arm64) → ghcr.io/umum-ai/bddb, published only from a pushed release tag.
+#
+#   push tag vX.Y.Z      build + push: X.Y.Z, X.Y, X, latest (latest only without a -pre suffix),
+#                        sha-<short>. `X` is emitted for 0.x too (metadata-action does not skip
+#                        {{major}}=0 by itself; the README only suggests an `enable=` opt-out).
+#   push main, PR        build both platforms, no push, no registry login — keeps the Dockerfile
+#                        honest without publishing anything.
+#   workflow_dispatch    build + push whatever ref it runs on (a tag → the tags above).
+#
+# BEADS_VERSION comes from the mise.toml pin (scripts/check-pins.sh --print). BDDB_VERSION (label
+# org.opencontainers.image.version) is the tag's version; `bddb version` inside the image prints
+# package.json's version regardless, and release.yml refuses a tag that differs from it.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
   workflow_dispatch:
 
@@ -23,10 +30,12 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/umum-ai/bddb
+  # Only a release tag (or a manual run) publishes.
+  PUSH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
 
 jobs:
   image:
-    name: build${{ github.event_name != 'pull_request' && ' + push' || '' }} (amd64, arm64)
+    name: build${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch') && ' + push' || '' }} (amd64, arm64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,15 +43,22 @@ jobs:
       - name: Pins agree (mise.toml, Dockerfile, version.ts, CI matrix)
         run: scripts/check-pins.sh
 
-      - name: Read BEADS_VERSION from mise.toml
-        id: pins
-        run: echo "beads=$(scripts/check-pins.sh --print)" >> "$GITHUB_OUTPUT"
+      - name: Versions (beads from mise.toml, bddb from the tag or package.json)
+        id: v
+        run: |
+          echo "beads=$(scripts/check-pins.sh --print)" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_REF" in
+            refs/tags/v*) bddb="$(scripts/release-check.sh --print "$GITHUB_REF_NAME")" ;;
+            *) bddb="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)-dev.${GITHUB_SHA::7}" ;;
+          esac
+          echo "bddb=$bddb" >> "$GITHUB_OUTPUT"
+          echo "BDDB_VERSION=$bddb"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: env.PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -54,28 +70,32 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # latest=auto: set on a semver tag without a pre-release suffix, never on main.
+          flavor: |
+            latest=auto
           tags: |
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}
           labels: |
             org.opencontainers.image.title=bddb
             org.opencontainers.image.description=Kanban dashboard for beads over the bd serve HTTP API
             org.opencontainers.image.licenses=MIT
-            org.beads.version=${{ steps.pins.outputs.beads }}
+            org.opencontainers.image.version=${{ steps.v.outputs.bddb }}
+            org.beads.version=${{ steps.v.outputs.beads }}
 
-      - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }}
+      - name: Build${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch') && ' and push' || '' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BEADS_VERSION=${{ steps.pins.outputs.beads }}
-            BDDB_VERSION=${{ steps.meta.outputs.version }}
+            BEADS_VERSION=${{ steps.v.outputs.beads }}
+            BDDB_VERSION=${{ steps.v.outputs.bddb }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false

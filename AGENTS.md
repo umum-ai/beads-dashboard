@@ -82,16 +82,15 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 | `tests/e2e/` | Playwright: `board`, `epics`, `edit`, `a11y` (keyboard, focus traps, simulated server states via `page.route`, axe), `live` (real only); `helpers.ts` |
 | `Dockerfile`, `.dockerignore`, `docker/bddb` | Multi-stage image (bd download + checksum, bun build, `oven/bun:1.4-slim` runtime); `docker/bddb` is the entry-point wrapper |
 | `docker-compose.example.yml` | Compose example with the commented env block |
-| `scripts/` | `stand.sh` (scratch dolt + bd serve; `status`/`down` read the ports `up` recorded in `stand.env`), `dev.sh`, `gen-api.sh`, `build-web.sh`, `build-server.sh`, `build-binary.sh`, `check-pins.sh`, `docker-smoke.sh`, `screenshots.ts` |
+| `scripts/` | `stand.sh` (scratch dolt + bd serve; `status`/`down` read the ports `up` recorded in `stand.env`), `dev.sh`, `gen-api.sh`, `build-web.sh`, `build-server.sh`, `build-binary.sh`, `check-pins.sh`, `release-check.sh` (tag ↔ package.json), `docker-smoke.sh`, `screenshots.ts` |
 | `dist/` | Build output (git-ignored): `web/`, `server/`, `bddb-<os>-<arch>` |
 | `docs/` | `README.md` (index), topology, configuration, bff-api, api-client, ui, host-setup, deployment, compatibility, `screenshots/` (README PNGs) |
-| `.github/workflows/` | `ci.yml` (lint, typecheck, unit, build, pins, contract matrix, hadolint + image build), `docker.yml` (GHCR, amd64+arm64), `release.yml` (release-please, binaries) |
-| `release-please-config.json`, `.release-please-manifest.json` | release-please (node type, tags `vX.Y.Z`, first release 0.1.0) |
+| `.github/workflows/` | `ci.yml` (lint, typecheck, unit, build, pins, contract matrix, hadolint + image build), `docker.yml` (GHCR amd64+arm64, pushes only from a `vX.Y.Z` tag), `release.yml` (on a `vX.Y.Z` tag: verify, binaries, GitHub release) |
 
 ## Conventions
 
-- Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`, ...). Releases via
-  release-please.
+- Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`, ...). Releases only on a
+  pushed tag `vX.Y.Z` by the owner ("Build and release"); never on a push to `main`.
 - Formatting and linting: biome, 2-space indent, line width 100. Do not add ESLint/Prettier.
 - Types are generated from `spec/openapi.v0.yaml` (`openapi-typescript`) and committed.
 - `revision` is an opaque **string**: compare for equality only, never parse it as a number.
@@ -147,11 +146,16 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 - **CI**: `ci.yml` — `check` (lint, typecheck, gen:api:check, unit, build, pins, actionlint),
   `contract` (matrix over beads versions against a real `bd serve`), `docker` (hadolint, pins,
   image build for the runner arch, label check). `docker.yml` — buildx amd64+arm64 →
-  `ghcr.io/umum-ai/bddb` with tags `sha-<7>`, `X.Y.Z`, `X.Y`, `latest` (main); PRs build only.
-  `release.yml` — release-please on `main` (conventional commits → release PR; the owner merges
-  → tag `vX.Y.Z` + GitHub release), then a matrix builds the four binaries and uploads them with
-  `.sha256` + `SHA256SUMS`, and `gh workflow run docker.yml --ref vX.Y.Z` builds the release image
-  (a tag created with `GITHUB_TOKEN` fires no `push: tags` event).
+  `ghcr.io/umum-ai/bddb`; pushes only on a `vX.Y.Z` tag (tags `X.Y.Z`, `X.Y`, `X` — `0` for 0.x,
+  `latest` unless the version has a `-pre` suffix, `sha-<7>`); pushes to `main` and PRs build both
+  platforms without publishing. `release.yml` — on a `vX.Y.Z` tag: `verify` (tag == package.json
+  via `scripts/release-check.sh`, pins, lint, typecheck, unit), a matrix builds the four binaries
+  (`actions/upload-artifact`), `release` creates the GitHub release "bddb X.Y.Z" (`--generate-notes`,
+  `--prerelease` for 0.x / `-pre`) with the `.tar.gz`, `.sha256` and `SHA256SUMS`; on an existing
+  release it re-uploads with `--clobber` (workflow_dispatch input `tag`).
+- **Release procedure** (owner): set `"version"` in `package.json`, commit `chore(release): X.Y.Z`,
+  push `main`; `mise run release:check -- vX.Y.Z`; `git tag -a vX.Y.Z -m "bddb X.Y.Z" && git push
+  origin vX.Y.Z`. The pushed tag fires both workflows; nothing is released from `main` itself.
 - **Smoke**: `scripts/docker-smoke.sh` builds the image and runs it with `--network host`
   against `scripts/stand.sh` (dolt bound via `STAND_DOLT_BIND`, `root@%` created when not
   loopback); checks readyz, meta, snapshot, redirect, asset loading, label, doctor exit codes,

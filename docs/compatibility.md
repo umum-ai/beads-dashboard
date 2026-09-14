@@ -57,9 +57,10 @@ The version appears in four places; `scripts/check-pins.sh` (run by CI in both t
    the `bd` from mise), and add a row to the matrix above.
 4. To keep testing an older release as well, leave it in `beads-version: [...]` — the matrix is
    a list so that supporting two releases is one line. The image always carries the mise pin.
-5. Merge → release-please proposes the next bddb release with the beads bump in its changelog
-   (`feat:`/`fix:` commit); merging that PR tags the release, builds the image for both
-   architectures and attaches the binaries (`docs/deployment.md`).
+5. Merge, then release by tag: bump `version` in `package.json` (`chore(release): X.Y.Z`), push,
+   `git tag -a vX.Y.Z -m "bddb X.Y.Z" && git push origin vX.Y.Z`. The tag builds the image for both
+   architectures (`X.Y.Z`, `X.Y`, `X`, `latest`) and the GitHub release with the binaries
+   (`docs/deployment.md`, `CONTRIBUTING.md` "Releasing").
 
 Renovate also tracks `bun` (mise pin + `oven/bun` base images, grouped), `dolt` (`aqua:dolthub/dolt`
 in mise.toml; only the stand and the CI contract job use it), the base-image digests, npm
