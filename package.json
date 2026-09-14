@@ -15,6 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/unit",
     "contract": "bun test tests/contract",
+    "gen:api": "scripts/gen-api.sh",
+    "gen:api:check": "scripts/gen-api.sh --check",
     "e2e": "echo 'e2e: not implemented yet (stage 3)'",
     "docker:build": "docker build -t bddb ."
   },

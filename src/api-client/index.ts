@@ -1,17 +1,46 @@
 /**
- * bd serve HTTP API client. Stage 0 placeholder; types are generated from
- * spec/openapi.v0.yaml in stage 1.
+ * bd serve HTTP API client (beads 1.3.0-rc.2, `/v0/beads`). See docs/api-client.md.
+ *
+ * - `BdClient` — typed methods for every operation the dashboard uses; throws `ProblemError`.
+ * - `watchEvents` / `SseParser` — the `events:watch` SSE consumer (no reconnect; the BFF does).
+ * - `Capabilities` / `checkVersion` — gate on `context.capabilities` and `bd_version`.
+ * - Types are generated from `spec/openapi.v0.yaml` (`mise run gen:api`) and aliased in `types.ts`.
  */
 
-/** Opaque optimistic-concurrency token returned by bd serve. Compare for equality only. */
-export type Revision = string;
-
-/** RFC 9457 problem document returned by bd serve on every non-2xx response. */
-export interface Problem {
-  code: string;
-  status: number;
-  title?: string;
-  detail?: string;
-  request_id?: string;
-  [extension: string]: unknown;
-}
+export {
+  Capabilities,
+  type Capability,
+  CapabilityError,
+  checkVersion,
+  parseSemVer,
+  type SemVer,
+  type VersionCheck,
+  type VersionLevel,
+} from "./capabilities.ts";
+export { BdClient, type BdClientOptions, type RequestOptions } from "./client.ts";
+export {
+  frameToWatchEvent,
+  type SseFrame,
+  SseParser,
+  SseProtocolError,
+  type WatchEvent,
+  type WatchEventsOptions,
+  watchEvents,
+} from "./events.ts";
+export { type ConnectionOptions, type QueryValue, serializeQuery } from "./http.ts";
+export {
+  isProblem,
+  isProblemClass,
+  isProblemCode,
+  type Problem,
+  type ProblemClass,
+  type ProblemCode,
+  ProblemError,
+  type ProblemReason,
+  parseRetryAfter,
+  problemClass,
+  problemFromBody,
+  problemFromResponse,
+  synthesizeProblem,
+} from "./problem.ts";
+export type * from "./types.ts";

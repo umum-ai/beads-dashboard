@@ -28,8 +28,16 @@ description = "Unit tests"
 run = "bun test tests/unit"
 
 [tasks.contract]
-description = "Contract tests against a real bd serve (placeholder until stage 1)"
+description = "Contract tests against a real bd serve (starts a scratch dolt + bd serve via scripts/stand.sh)"
 run = "bun test tests/contract"
+
+[tasks."gen:api"]
+description = "Regenerate src/api-client/generated/openapi.d.ts from spec/openapi.v0.yaml"
+run = "scripts/gen-api.sh"
+
+[tasks."gen:api:check"]
+description = "Fail when the generated API types are stale"
+run = "scripts/gen-api.sh --check"
 
 [tasks.e2e]
 description = "End-to-end tests (placeholder until stage 3)"
