@@ -48,7 +48,42 @@ On Linux Docker Engine add `--add-host=host.docker.internal:host-gateway` or use
 networking). A password-less Dolt listening on `0.0.0.0` exposes all of its data to your
 network — restrict it accordingly.
 
+## Running from source
+
+```sh
+bddb serve  [flags]     # start the dashboard (BFF + SPA); flags mirror the BDDB_* variables
+bddb doctor [flags]     # check dolt, databases, bd, bd serve and the events journal
+bddb version            # bddb version and the beads version it was built for
+bddb help
+```
+
+`bddb` is `bun src/server/cli.ts` in a checkout (`bun run serve`, `bun run doctor`). Typical
+host run against the beads shared server:
+
+```sh
+bddb doctor --dolt-host 127.0.0.1 --dolt-port 3308      # all ✓ ?
+bddb serve  --dolt-host 127.0.0.1 --dolt-port 3308      # → http://localhost:7331
+```
+
+`doctor` prints a ✓/✗ table — `bd` binary and version, `git`, Dolt reachability, discovered
+databases, a temporary `bd serve` for the first database, the events journal — with a hint
+under every failed row, and exits non-zero when a critical check fails:
+
+```text
+  ✓ bd binary            bd version 1.3.0-rc.2 (bd)
+  ✓ git binary           git version 2.55.0
+  ✗ dolt reachable       cannot connect to 127.0.0.1:3390
+                         → is `dolt sql-server` running? shared-server mode: `bd dolt status` …
+```
+
+`serve` discovers the databases (or takes `BDDB_DATABASES`), starts one `bd serve` per
+database on a loopback port, and serves the board on `BDDB_HOST:BDDB_PORT`. Process endpoints:
+`/healthz` (alive), `/readyz` (200 once a database is ready), `/api/meta`. Stop with Ctrl-C;
+every `bd serve` it started is stopped too.
+
 ### Configuration
+
+Full reference with flags and semantics: [docs/configuration.md](docs/configuration.md).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -66,13 +101,19 @@ network — restrict it accordingly.
 
 ### Host setup
 
-- Move an embedded workspace to server mode: `bd init --server` (external `dolt sql-server`)
-  or `bd init --shared-server` (one Dolt for all your projects). See the beads documentation.
+Details in [docs/host-setup.md](docs/host-setup.md); the short version:
+
+- Move an embedded workspace to server mode: `bd export`, then `bd init --shared-server
+  --reinit-local` (one Dolt for all your projects) or `bd init --server --external …`, then
+  `bd import`.
 - Enable the events journal in every workspace your agents write from:
   `bd config set events-journal true`. Without it the dashboard falls back to polling for
   those changes.
 - Run `bddb doctor` to check Dolt connectivity, discovered databases, the `bd` version and
   the journal.
+
+How the pieces fit together: [docs/topology.md](docs/topology.md). The HTTP contract between
+the server and the SPA: [docs/bff-api.md](docs/bff-api.md).
 
 ## Development
 

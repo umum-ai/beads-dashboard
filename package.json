@@ -9,7 +9,9 @@
     "bddb": "src/server/cli.ts"
   },
   "scripts": {
-    "dev": "bun --hot src/server/main.ts",
+    "dev": "scripts/dev.sh",
+    "serve": "bun src/server/cli.ts serve",
+    "doctor": "bun src/server/cli.ts doctor",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
@@ -17,8 +19,9 @@
     "contract": "bun test tests/contract",
     "gen:api": "scripts/gen-api.sh",
     "gen:api:check": "scripts/gen-api.sh --check",
-    "e2e": "echo 'e2e: not implemented yet (stage 3)'",
-    "docker:build": "docker build -t bddb ."
+    "e2e": "playwright test",
+    "docker:build": "docker build -t bddb .",
+    "dev:mock": "bun src/web/dev/mock-bff.ts"
   },
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^3.1.0",
@@ -29,6 +32,7 @@
     "preact": "^10.29.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/bun": "^1.4.2",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5"

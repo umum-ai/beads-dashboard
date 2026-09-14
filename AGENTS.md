@@ -26,18 +26,41 @@ mise run typecheck      # tsc --noEmit
 mise run test           # bun test tests/unit
 mise run contract       # bun test tests/contract (needs bd + dolt)
 mise run e2e            # Playwright (stage 3+)
-mise run dev            # bun --hot src/server/main.ts
+mise run dev            # scripts/dev.sh: stand up if needed, then bun --hot src/server/main.ts against it
+mise run doctor         # bddb doctor against the local stand (dolt 3399)
 mise run docker:build   # docker build -t bddb .
 ```
 
 Acceptance for any change: `mise run lint && mise run typecheck && mise run test` pass.
 Workflow files must pass `actionlint`, Dockerfiles `hadolint`.
 
+### Running the server against the stand
+
+```sh
+scripts/stand.sh up && scripts/stand.sh seed        # dolt 127.0.0.1:3399, database `kb`, bd serve 47313
+BDDB_DOLT_HOST=127.0.0.1 BDDB_DOLT_PORT=3399 BDDB_HOST=127.0.0.1 BDDB_PORT=7331 \
+  BDDB_WORK_DIR=.stand/bddb-work bun src/server/cli.ts serve            # or: mise run dev
+curl -s localhost:7331/api/meta | jq .
+curl -s localhost:7331/api/p/kb/snapshot | jq '.issues | length'
+curl -N localhost:7331/api/p/kb/events &                                # snapshot, then deltas…
+(cd .stand/ws && bd q "from the CLI")                                    # …this arrives as a delta
+bun src/server/cli.ts doctor --dolt-host 127.0.0.1 --dolt-port 3399
+scripts/stand.sh down [--purge]
+```
+
+Rules for anything that spawns `bd`: strip every `BEADS_*` / `BD_*` variable from the
+environment (the agent shell binds `bd` to the real store on 127.0.0.1:3308 — never touch it),
+set the connection explicitly (`BEADS_DOLT_SERVER_HOST/PORT/DATABASE/USER`, `BEADS_DOLT_PASSWORD`,
+`BEADS_DOLT_AUTO_START=0`, `BD_EVENTS_JOURNAL=1`), run `bd serve` with `cwd` in the workspace, and
+stop the detached `bd db-proxy-child` (`.beads/dolt/proxy.pid`) together with `bd serve`
+(`src/server/workspace.ts`, `supervisor.ts`). Use a dedicated `BDDB_WORK_DIR` per running
+instance: two bddb processes sharing `<work-dir>/<db>` would also share the proxy pid file.
+
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/server/` | BFF: `main.ts` (server), `cli.ts` (`bddb serve` / `bddb doctor`), supervisor for `bd serve`, discovery, snapshot, SSE fan-out, polling |
+| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals), `app.ts` (routes), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `types.ts` (wire types of docs/bff-api.md) |
 | `src/web/` | Preact SPA (`index.html`, `main.tsx`) |
 | `src/api-client/` | Types generated from the spec, HTTP client, Problem handling, capability gating |
 | `spec/openapi.v0.yaml` | Pinned copy of the `bd serve` OpenAPI spec for the supported beads version. Source of truth for the contract; never hand-edit |

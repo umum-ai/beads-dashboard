@@ -1,8 +1,5 @@
 import { render } from "preact";
-
-export function App() {
-  return <h1>bddb</h1>;
-}
+import { App } from "./app.tsx";
 
 const root = document.getElementById("app");
 if (root) {

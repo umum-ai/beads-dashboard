@@ -8,8 +8,12 @@ actionlint = "1.7.7"
 hadolint = "2.15.1"
 
 [tasks.dev]
-description = "Run the BFF with hot reload"
-run = "bun --hot src/server/main.ts"
+description = "Start the local stand if needed, then run the BFF with hot reload against it"
+run = "scripts/dev.sh"
+
+[tasks.doctor]
+description = "bddb doctor against the local stand (dolt 3399)"
+run = "bun src/server/cli.ts doctor --dolt-host 127.0.0.1 --dolt-port 3399"
 
 [tasks.lint]
 description = "Biome check (format + lint), read-only"
@@ -39,9 +43,13 @@ run = "scripts/gen-api.sh"
 description = "Fail when the generated API types are stale"
 run = "scripts/gen-api.sh --check"
 
+[tasks."dev:mock"]
+description = "Serve the SPA on a mock BFF with an in-memory fixture (http://127.0.0.1:7331)"
+run = "bun src/web/dev/mock-bff.ts"
+
 [tasks.e2e]
-description = "End-to-end tests (placeholder until stage 3)"
-run = "echo 'e2e: not implemented yet (stage 3)'"
+description = "Playwright e2e; E2E_TARGET=mock (default) starts the mock BFF, otherwise uses BDDB_URL"
+run = "bunx playwright test"
 
 [tasks."docker:build"]
 description = "Build the bddb container image (Dockerfile arrives in stage 6)"

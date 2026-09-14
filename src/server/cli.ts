@@ -2,27 +2,68 @@
 /**
  * bddb command-line entry point.
  *
- *   bddb serve   start the dashboard (BFF + SPA)
- *   bddb doctor  check dolt, bd and bd serve reachability (stage 2)
+ *   bddb serve [flags]   start the dashboard (BFF + SPA)
+ *   bddb doctor [flags]  check dolt, bd, bd serve and the events journal
+ *   bddb version         print versions
+ *   bddb help            this text
+ *
+ * Flags mirror the BDDB_* environment variables one to one (src/server/config.ts).
  */
-import { startServer } from "./main.ts";
+import { ConfigError, FLAGS_HELP, loadConfig } from "./config.ts";
+import { formatReport, runDoctor } from "./doctor.ts";
+import { reportStartupError, startServer } from "./main.ts";
+import { BDDB_VERSION, BUILT_FOR_BEADS } from "./version.ts";
 
-const USAGE = `bddb - kanban dashboard for beads (bd serve HTTP API)
+const USAGE = `bddb ${BDDB_VERSION} — kanban dashboard for beads (bd serve HTTP API)
 
 Usage:
-  bddb serve    Start the dashboard server (BDDB_HOST, BDDB_PORT, ...)
-  bddb doctor   Diagnose the environment: dolt, bd, bd serve, events journal
-  bddb help     Show this message
-`;
+  bddb serve [flags]    Start the dashboard server
+  bddb doctor [flags]   Diagnose the environment: dolt, bd, bd serve, events journal
+  bddb version          Print bddb and target beads versions
+  bddb help             Show this message
 
-export function main(argv: readonly string[]): number {
-  const [command] = argv;
+${FLAGS_HELP}
+
+Docs: docs/configuration.md, docs/host-setup.md`;
+
+/** Parse-only commands return an exit code; `serve` returns `null` and keeps running. */
+export async function main(argv: readonly string[]): Promise<number | null> {
+  const [command, ...rest] = argv;
   switch (command) {
-    case "serve":
-      startServer();
-      return 0;
-    case "doctor":
-      console.log("bddb doctor: not implemented yet (stage 2)");
+    case "serve": {
+      if (rest.includes("--help") || rest.includes("-h")) {
+        console.log(USAGE);
+        return 0;
+      }
+      try {
+        await startServer({ argv: rest });
+        return null;
+      } catch (err) {
+        return reportStartupError(err);
+      }
+    }
+    case "doctor": {
+      if (rest.includes("--help") || rest.includes("-h")) {
+        console.log(USAGE);
+        return 0;
+      }
+      try {
+        const config = loadConfig({ argv: rest });
+        const report = await runDoctor({ config });
+        console.log(formatReport(report));
+        return report.exitCode;
+      } catch (err) {
+        if (err instanceof ConfigError) {
+          console.error(`bddb: ${err.message}`);
+          return 2;
+        }
+        throw err;
+      }
+    }
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(`bddb ${BDDB_VERSION} (built for beads ${BUILT_FOR_BEADS})`);
       return 0;
     case undefined:
     case "help":
@@ -38,8 +79,6 @@ export function main(argv: readonly string[]): number {
 }
 
 if (import.meta.main) {
-  const code = main(process.argv.slice(2));
-  if (code !== 0) {
-    process.exit(code);
-  }
+  const code = await main(process.argv.slice(2));
+  if (code !== null) process.exit(code);
 }

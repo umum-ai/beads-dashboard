@@ -1,35 +1,77 @@
 /**
- * bddb BFF entry point. Stage 0 skeleton: serves /healthz only.
- * The full server (discovery, bd serve supervisor, snapshot, SSE fan-out) arrives in stage 2.
+ * `bddb serve` runtime: load configuration, create the app, stop everything on SIGINT/SIGTERM.
+ * `bun --hot src/server/main.ts` keeps the previous app on `globalThis` and stops it before
+ * starting the new one, so hot reloads do not leak `bd serve` processes.
  */
+import { type App, createApp } from "./app.ts";
+import { type Config, ConfigError, loadConfig } from "./config.ts";
+import { DiscoveryError } from "./discovery.ts";
+import { createLogger, type Logger } from "./log.ts";
 
-export interface ServeOptions {
-  host?: string;
-  port?: number;
+declare global {
+  var __bddbApp: App | undefined;
 }
 
-export function startServer(options: ServeOptions = {}) {
-  const host = options.host ?? process.env.BDDB_HOST ?? "0.0.0.0";
-  const port = options.port ?? Number(process.env.BDDB_PORT ?? 7331);
+export interface StartOptions {
+  config?: Config;
+  argv?: readonly string[];
+  log?: Logger;
+}
 
-  const server = Bun.serve({
-    hostname: host,
-    port,
-    fetch(request) {
-      const url = new URL(request.url);
-      if (url.pathname === "/healthz") {
-        return new Response("bddb skeleton", {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
-      }
-      return new Response("not found", { status: 404 });
-    },
-  });
+/** Create the app and wire process signals. Rejects with `ConfigError` / `DiscoveryError`. */
+export async function startServer(options: StartOptions = {}): Promise<App> {
+  const config = options.config ?? loadConfig({ argv: options.argv ?? [] });
+  const log = options.log ?? createLogger({ level: config.logLevel, format: config.logFormat });
+  const app = await createApp({ config, log });
+  globalThis.__bddbApp = app;
 
-  console.log(`bddb: listening on http://${server.hostname}:${server.port}`);
-  return server;
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    // Under `bun --hot` the previous module instance keeps its handlers; only the live app acts.
+    if (globalThis.__bddbApp !== app || shuttingDown) return;
+    shuttingDown = true;
+    log.info("signal received", { signal });
+    const timer = setTimeout(() => {
+      log.error("shutdown timed out; exiting");
+      process.exit(1);
+    }, 15_000);
+    app
+      .stop()
+      .catch((err: unknown) => log.error("shutdown failed", { error: err }))
+      .finally(() => {
+        clearTimeout(timer);
+        process.exit(0);
+      });
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+  return app;
+}
+
+/** Print a configuration/discovery failure the way the CLI does and return the exit code. */
+export function reportStartupError(err: unknown): number {
+  if (err instanceof ConfigError) {
+    console.error(`bddb: ${err.message}`);
+    return 2;
+  }
+  if (err instanceof DiscoveryError) {
+    console.error(`bddb: ${err.message}`);
+    for (const hint of err.hints) console.error(`  → ${hint}`);
+    return 2;
+  }
+  console.error(`bddb: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  return 1;
 }
 
 if (import.meta.main) {
-  startServer();
+  if (globalThis.__bddbApp) {
+    await globalThis.__bddbApp.stop();
+    globalThis.__bddbApp = undefined;
+  }
+  try {
+    await startServer({ argv: process.argv.slice(2) });
+  } catch (err) {
+    process.exit(reportStartupError(err));
+  }
 }

@@ -5,3 +5,7 @@ dist/
 *.log
 .rumdl_cache/
 .stand/
+
+# Playwright
+test-results/
+playwright-report/

@@ -12,8 +12,9 @@ Conventions:
   `bd serve` are passed through **unchanged** (same status, same body). Problems produced by
   `bddb` itself use codes prefixed `bddb_`:
   `bddb_database_unknown` (404), `bddb_not_ready` (503, database still starting or its
-  `bd serve` is down; honours `Retry-After`), `bddb_upstream_unavailable` (502, `bd serve`
-  answered with a non-problem error or the connection failed), `bddb_invalid_argument` (400).
+  `bd serve` is down; honours `Retry-After`, currently `2`), `bddb_upstream_unavailable` (502,
+  `bd serve` answered with a non-problem error or the connection failed),
+  `bddb_invalid_argument` (400), `bddb_not_found` (404, no such route under `/api`).
 - `<db>` is the database name as listed in `GET /api/meta`.
 - `revision` is an opaque string everywhere. `metadata` is arbitrary JSON.
 - All write requests carry `actor` (string) in the body. If missing, the server fills
@@ -75,6 +76,22 @@ Scope of `issues`: every issue that is **not** hidden by `bd serve` defaults (no
 flags are ever sent), in every status of category active, wip and frozen, plus issues in
 done-category statuses whose `closed_at` is within the last `closedDays` days. Older closed
 issues are fetched on demand (see `issues` list proxy). `limit=0` is used (we are on loopback).
+
+Implementation notes (server side, verified on bd 1.3.0-rc.2):
+
+- A full re-baseline is 7 loopback calls: `config/status.custom`, `config/types.custom`,
+  `issues?limit=0&brief=true` (active + wip: the server default), `issues?status=<frozen
+  names>&limit=0&brief=true`, the closed window, `ready?limit=0`, `stats`. The closed window is
+  bounded **server-side** with `issues:query?q=(status=closed OR …) AND closed>=<ISO timestamp>
+  &limit=0` (the `bd query` language accepts `closed>=2026-09-07T12:00:00Z`; the timestamp is
+  `now - closedDays`); if a server ever rejects that expression with `400`, bddb falls back to
+  `issues?status=<done names>&limit=0&brief=true` filtered by `closed_at` client-side.
+- `dependency_count` / `dependent_count` follow the **list** semantics of `GET issues`, which
+  counts blocking edges only (`blocks`, `conditional-blocks`, `waits-for`; `parent-child` and
+  `related` are not counted). `GET issues/{id}` counts every edge — bddb recounts from the edge
+  lists of the detail when it re-reads a row, so polls and event-driven refreshes agree.
+- `projectId` is `null` for now: bddb does not write `project_id` into the synthesized
+  workspace, so `bd serve` reports `project_id: ""` and no `Bd-Project-Id` is sent upstream.
 
 ## Per-database live stream
 
@@ -145,6 +162,19 @@ must reconcile with the following `delta`.
 
 Everything not under `/api`, `/healthz`, `/readyz` serves the SPA (`index.html` fallback for
 `/p/<db>/board`, `/p/<db>/epics`, `/p/<db>/issue/<id>`, `/`). `/` redirects to
-`/p/<defaultDatabase>/board`. Asset URLs are relative so `BDDB_BASE_PATH` works; the SPA reads
-its base path from `<base href>` injected by the server (or from `window.__BDDB__` — the
-implementer picks one and documents it here).
+`/p/<defaultDatabase>/board`. Unknown paths outside `/p/*` are `404 text/plain`.
+
+Base path mechanism — **`<base href>`** (decided; `window.__BDDB__` is not emitted):
+
+- `BDDB_BASE_PATH` empty (default): `src/web/index.html` is served through Bun HTML routes on
+  `/p/*`. Bun rewrites asset URLs to root-absolute paths (`/chunk-<hash>.js`), no `<base>` tag
+  is injected, and the SPA resolves its base path to `""`.
+- `BDDB_BASE_PATH=/prefix`: Bun HTML routes cannot prefix asset URLs, so the server builds the
+  SPA at start with `Bun.build({ publicPath: "/prefix/" })` (or serves a pre-built
+  `BDDB_WEB_DIR` built with the same `--public-path`) and injects `<base href="/prefix/">` right
+  after `<head>` in `index.html`. Assets are served at `/prefix/<file>` (hashed names get
+  `Cache-Control: immutable`), `/prefix/p/*` returns `index.html`, `/prefix` redirects to the
+  default board, and any request outside `/prefix` is `404`.
+
+The SPA derives its base path from `document.querySelector("base[href]")` when present, else
+`""`, and prefixes every `/api/…` and `/p/…` URL with it (`src/web/lib/basePath.ts`).

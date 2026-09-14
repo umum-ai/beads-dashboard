@@ -70,7 +70,7 @@ async function runStand(args: string[]): Promise<string> {
 function parseKeyValues(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split("\n")) {
-    const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
+    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
     if (m?.[1] !== undefined) out[m[1]] = m[2] ?? "";
   }
   return out;
@@ -103,6 +103,14 @@ export async function startStand(): Promise<Stand> {
     fresh,
   };
 }
+
+/** `scripts/stand.sh seed` → the seeded ids (`SEED_EPIC`, `SEED_CHILD1`, `SEED_CHILD2`, `SEED_TASK`, `SEED_CLOSED`). */
+export async function seedStand(stand: Stand): Promise<Record<string, string>> {
+  return parseKeyValues(await runStand(["seed", "--dir", stand.dir]));
+}
+
+/** Environment for child processes that must never see the BEADS_* / BD_* variables of this shell. */
+export { cleanEnv };
 
 export async function stopStand(stand: Stand): Promise<void> {
   if (process.env.KEEP_STAND === "1") {
