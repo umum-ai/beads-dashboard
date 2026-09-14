@@ -14,7 +14,7 @@ import { isDoneStatus } from "../../lib/dnd-intent.ts";
 import { formatDateTime } from "../../lib/time.ts";
 import { closeRows, reopenRow } from "../../state/actions.ts";
 import { actor } from "../../state/meta.ts";
-import { navigate } from "../../state/route.ts";
+import { detailRoute, navigate } from "../../state/route.ts";
 import { allIssues, board } from "../../state/snapshot.ts";
 import { pushToast, toastError } from "../../state/toasts.ts";
 import { typeLabel } from "../Card.tsx";
@@ -328,7 +328,7 @@ export function Fields({
               title={t("detail.openParent")}
               aria-label={t("detail.openParent")}
               data-testid="detail-parent-open"
-              onClick={() => navigate({ kind: "issue", db, issueId: d.parent as string })}
+              onClick={() => navigate(detailRoute(db, d.parent as string))}
             >
               ↗
             </button>

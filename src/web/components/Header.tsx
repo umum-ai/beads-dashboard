@@ -1,10 +1,11 @@
-/** Top bar: brand, project switcher, view tabs, live indicator, actor, language and theme. */
+/** Top bar: brand, project switcher, view tabs, live indicator, board settings, actor, language, theme. */
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import { language, t, toggleLanguage } from "../i18n/index.ts";
 import { actor, databases, meta } from "../state/meta.ts";
 import { actorPref, setActor, theme, toggleTheme } from "../state/prefs.ts";
 import { currentDb, hrefFor, navigate, onLinkClick, route } from "../state/route.ts";
+import { BoardSettings } from "./BoardSettings.tsx";
 import { LiveIndicator } from "./LiveIndicator.tsx";
 import { Popover } from "./Popover.tsx";
 import { toggleHelp } from "./ShortcutsHelp.tsx";
@@ -88,7 +89,7 @@ function ViewTabs(): JSX.Element | null {
   if (!db) return null;
   const r = route.value;
   const onBoard = r.kind === "board" || r.kind === "issue";
-  const onEpics = r.kind === "epics";
+  const onEpics = r.kind === "epics" || r.kind === "epicsIssue";
   return (
     <nav class="tabs" aria-label={t("nav.board")}>
       <a
@@ -206,6 +207,7 @@ export function Header(): JSX.Element {
       <LiveIndicator />
       <span class="header__sep" aria-hidden="true" />
       <div class="header__group">
+        {currentDb.value ? <BoardSettings db={currentDb.value} /> : null}
         <ActorSetting />
         <button
           type="button"

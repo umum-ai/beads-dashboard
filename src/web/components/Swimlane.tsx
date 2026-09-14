@@ -195,8 +195,8 @@ export interface SwimlaneBoardProps {
   progressOf: (epic: BoardIssue) => Progress;
   fallbackLabel: string;
   onOpenEpic: (id: string) => void;
-  /** Per-status extras (closed window, "show all") passed straight to `Column`. */
-  columnExtras: (status: StatusDef) => Pick<ColumnProps, "closedDays" | "showAll">;
+  /** Per-status extras (the closed window) passed straight to `Column`. */
+  columnExtras: (status: StatusDef) => Pick<ColumnProps, "closedHours">;
   /** Parent id a card gets when it lands in the lane (`""` clears it). */
   parentIdOf: (lane: Lane) => string;
 }

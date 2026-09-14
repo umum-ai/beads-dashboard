@@ -50,7 +50,11 @@ const BUILTIN_TYPES = [
   "milestone",
 ];
 
-/** Rows are dated relative to start-up so the closed window (7 days) keeps the same shape. */
+/**
+ * Rows are dated relative to start-up so the closed window keeps the same shape. Closed rows
+ * sit at ~2 h (a9b), ~3-10 h, ~20 h (g1a.1.1), ~30-50 h (a1f.1, b2c.3) and beyond the server's
+ * 72 h (b8c, c9d, d0e), so every period of the settings select changes the Closed column.
+ */
 export const FIXTURE_EPOCH = Math.floor(Date.now() / 3_600_000) * 3_600_000;
 
 function iso(hoursAgo: number): string {
@@ -618,7 +622,7 @@ function buildSiam(): FixtureDb {
       priority: 2,
       labels: ["lane:server"],
       ageH: 200,
-      closedH: 3,
+      closedH: 2,
     },
     {
       id: "b0c",

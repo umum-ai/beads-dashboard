@@ -15,7 +15,7 @@ import type { BoardIssue, TreeNode } from "../lib/bff-types.ts";
 import { clampPriority } from "../lib/board.ts";
 import { ancestorsOf, childrenOf } from "../lib/hierarchy.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
-import { hrefFor, navigate } from "../state/route.ts";
+import { detailRoute, hrefFor, navigate } from "../state/route.ts";
 import { hierarchy } from "../state/snapshot.ts";
 import { describeError } from "../state/toasts.ts";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs.tsx";
@@ -38,7 +38,7 @@ interface TreeRowProps {
 }
 
 export function TreeRow(props: TreeRowProps): JSX.Element {
-  const target = { kind: "issue" as const, db: props.db, issueId: props.id };
+  const target = detailRoute(props.db, props.id);
   const p = props.priority === undefined ? null : clampPriority(props.priority);
   return (
     <li
@@ -204,8 +204,8 @@ export function HierarchySection({ db, id, row, title }: HierarchySectionProps):
       id: a.id,
       label: a.title,
       title: a.title,
-      href: hrefFor({ kind: "issue", db, issueId: a.id }),
-      onSelect: () => navigate({ kind: "issue", db, issueId: a.id }),
+      href: hrefFor(detailRoute(db, a.id)),
+      onSelect: () => navigate(detailRoute(db, a.id)),
     })),
     { key: id, id, label: row?.title ?? title, title: row?.title ?? title },
   ];
@@ -225,11 +225,7 @@ export function HierarchySection({ db, id, row, title }: HierarchySectionProps):
         <ul class="rel-list" data-testid="detail-children">
           {children.map((child) => (
             <li key={child.id} data-id={child.id}>
-              <button
-                type="button"
-                class="rel"
-                onClick={() => navigate({ kind: "issue", db, issueId: child.id })}
-              >
+              <button type="button" class="rel" onClick={() => navigate(detailRoute(db, child.id))}>
                 <span aria-hidden="true">{typeGlyph(child.issue_type)}</span>
                 <span class="mono">{child.id}</span>
                 <span class="rel__title ellipsis" title={child.title}>

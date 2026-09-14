@@ -20,7 +20,8 @@ export interface Config {
   defaultDatabase: string | null;
   actor: string;
   pollIntervalMs: number;
-  closedDays: number;
+  /** Closed issues newer than this many hours are in the board snapshot (1–720). */
+  closedHours: number;
   bdPath: string;
   logLevel: LogLevel;
   logFormat: LogFormat;
@@ -50,7 +51,7 @@ export const FLAG_ENV: Readonly<Record<string, string>> = {
   "default-database": "BDDB_DEFAULT_DATABASE",
   actor: "BDDB_ACTOR",
   "poll-interval": "BDDB_POLL_INTERVAL",
-  "closed-days": "BDDB_CLOSED_DAYS",
+  "closed-hours": "BDDB_CLOSED_HOURS",
   "bd-path": "BDDB_BD_PATH",
   "log-level": "BDDB_LOG_LEVEL",
   "log-format": "BDDB_LOG_FORMAT",
@@ -68,7 +69,7 @@ export const DEFAULTS = {
   doltPassword: "",
   actor: "bddb",
   pollInterval: "15s",
-  closedDays: 7,
+  closedHours: 72,
   bdPath: "bd",
   logLevel: "info" as LogLevel,
   logFormat: "text" as LogFormat,
@@ -253,11 +254,11 @@ export function loadConfig(input: LoadConfigInput = {}): Config {
     defaultDatabase,
     actor,
     pollIntervalMs,
-    closedDays: intOf(
-      "BDDB_CLOSED_DAYS",
-      pick("closed-days") ?? String(DEFAULTS.closedDays),
-      0,
-      36500,
+    closedHours: intOf(
+      "BDDB_CLOSED_HOURS",
+      pick("closed-hours") ?? String(DEFAULTS.closedHours),
+      1,
+      720,
     ),
     bdPath,
     logLevel: logLevelText,
@@ -277,10 +278,10 @@ export const FLAGS_HELP = `Flags (each overrides the environment variable in bra
   --dolt-user USER         dolt MySQL user                  [BDDB_DOLT_USER=${DEFAULTS.doltUser}]
   --dolt-password PASS     dolt password                    [BDDB_DOLT_PASSWORD=]
   --databases a,b          databases to serve (CSV)         [BDDB_DATABASES= (auto-discovery)]
-  --default-database NAME  project opened by default        [BDDB_DEFAULT_DATABASE= (first)]
+  --default-database NAME  project opened by default        [BDDB_DEFAULT_DATABASE= (largest)]
   --actor NAME             default actor for writes         [BDDB_ACTOR=${DEFAULTS.actor}]
   --poll-interval 15s      full re-read interval            [BDDB_POLL_INTERVAL=${DEFAULTS.pollInterval}]
-  --closed-days N          closed issues shown on the board [BDDB_CLOSED_DAYS=${DEFAULTS.closedDays}]
+  --closed-hours N         closed window on the board (h)   [BDDB_CLOSED_HOURS=${DEFAULTS.closedHours}]
   --bd-path PATH           bd binary                        [BDDB_BD_PATH=${DEFAULTS.bdPath}]
   --log-level LEVEL        debug|info|warn|error            [BDDB_LOG_LEVEL=${DEFAULTS.logLevel}]
   --log-format FMT         text|json                        [BDDB_LOG_FORMAT=${DEFAULTS.logFormat}]

@@ -1,4 +1,4 @@
-/** Board data for the current database: snapshot state, live status, extra closed rows. */
+/** Board data for the current database: snapshot state, live status, derived indexes. */
 import { computed, effect, signal } from "@preact/signals";
 import type { BoardIssue, DatabaseInfo } from "../lib/bff-types.ts";
 import { type BoardState, emptyBoardState } from "../lib/delta.ts";
@@ -21,11 +21,6 @@ export const connection = signal<Connection>("idle");
 export const disconnectedSince = signal<number | null>(null);
 export const dbInfo = signal<DatabaseInfo | null>(null);
 
-/** Closed issues outside the closed window, loaded on demand ("Show all closed"). */
-export const extraClosed = signal<Map<string, BoardIssue>>(new Map());
-export const extraClosedLoading = signal(false);
-export const extraClosedLoaded = signal(false);
-
 /** Ticks every 15 s so relative times re-render; every second while the server is unreachable. */
 export const now = signal(Date.now());
 if (typeof setInterval !== "undefined") {
@@ -41,19 +36,12 @@ if (typeof setInterval !== "undefined") {
   });
 }
 
-export const allIssues = computed<BoardIssue[]>(() => {
-  const main = board.value.issues;
-  const out = [...main.values()];
-  for (const [id, row] of extraClosed.value) if (!main.has(id)) out.push(row);
-  return out;
-});
+/** Every row of the snapshot (the server's closed window included; the board narrows it). */
+export const allIssues = computed<BoardIssue[]>(() => [...board.value.issues.values()]);
 
 export function resetBoard(): void {
   board.value = emptyBoardState();
   boardError.value = null;
-  extraClosed.value = new Map();
-  extraClosedLoaded.value = false;
-  extraClosedLoading.value = false;
   dbInfo.value = null;
 }
 

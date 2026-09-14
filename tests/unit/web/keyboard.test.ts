@@ -11,6 +11,8 @@ describe("resolveShortcut", () => {
     expect(resolveShortcut({ key: "/" }, false)).toBe("focusSearch");
     expect(resolveShortcut({ key: "n" }, false)).toBe("newIssue");
     expect(resolveShortcut({ key: "?", shiftKey: true }, false)).toBe("help");
+    expect(resolveShortcut({ key: "," }, false)).toBe("settings");
+    expect(resolveShortcut({ key: "," }, true)).toBeNull();
     expect(resolveShortcut({ key: "x" }, false)).toBeNull();
   });
   test("fields and modifiers swallow them, Escape always passes", () => {

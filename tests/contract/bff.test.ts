@@ -124,10 +124,13 @@ describe("process endpoints", () => {
     expect(meta.bddb.builtForBeads).toBe("1.3.0-rc.2");
     expect(meta.defaultDatabase).toBe(db);
     expect(meta.pollIntervalMs).toBe(3000);
+    expect(meta.closedHours).toBe(72);
     expect(meta.databases).toHaveLength(1);
     const info = meta.databases[0];
     expect(info?.name).toBe(db);
     expect(info?.state).toBe("ready");
+    // Discovery counted `issues` after the seed: at least the seeded rows (epic, 2 children, task, closed).
+    expect(info?.issueCount).toBeGreaterThanOrEqual(Object.keys(seed).length);
     expect(info?.bdVersion).toMatch(/^1\.3\./);
     expect(info?.capabilities).toContain("events.watch");
     expect(info?.versionWarning).toBeNull();

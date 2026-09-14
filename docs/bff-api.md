@@ -35,9 +35,9 @@ Conventions:
 ```ts
 type Meta = {
   bddb: { version: string; builtForBeads: string }; // e.g. "0.1.0", "1.3.0-rc.2"
-  defaultDatabase: string;
+  defaultDatabase: string;   // BDDB_DEFAULT_DATABASE, else the database with the largest issueCount
   actorDefault: string;      // BDDB_ACTOR
-  closedDays: number;        // BDDB_CLOSED_DAYS
+  closedHours: number;       // BDDB_CLOSED_HOURS: the server-side closed window (hours, 1–720; default 72)
   pollIntervalMs: number;    // BDDB_POLL_INTERVAL
   databases: DatabaseInfo[];
 };
@@ -51,6 +51,7 @@ type DatabaseInfo = {
   projectId: string | null;
   versionWarning: string | null;       // set when bd_version major/minor differs from builtForBeads
   capabilities: string[];
+  issueCount: number;                  // rows in the `issues` table at discovery (startup); not kept live
   lastError?: string | null;           // why the database is down/degraded (below); null while ready
 };
 ```
@@ -98,8 +99,10 @@ delta's `upserts`.
 
 Scope of `issues`: every issue that is **not** hidden by `bd serve` defaults (no `include_*`
 flags are ever sent), in every status of category active, wip and frozen, plus issues in
-done-category statuses whose `closed_at` is within the last `closedDays` days. Older closed
-issues are fetched on demand (see `issues` list proxy). `limit=0` is used (we are on loopback).
+done-category statuses whose `closed_at` is within the last `closedHours` hours
+(`Meta.closedHours`, `BDDB_CLOSED_HOURS`, default 72). That window is the upper bound: the SPA
+narrows the Done column client-side (1–72 h) within the rows it already has. Older closed
+issues are not part of the snapshot; the `issues` list proxy can still page them, the SPA does not. `limit=0` is used (we are on loopback).
 
 Implementation notes (server side, verified on bd 1.3.0-rc.2):
 
@@ -123,7 +126,7 @@ Implementation notes (server side, verified on bd 1.3.0-rc.2):
   names>&limit=0&brief=true`, the closed window, `ready?limit=0`, `stats`. The closed window is
   bounded **server-side** with `issues:query?q=(status=closed OR …) AND closed>=<ISO timestamp>
   &limit=0` (the `bd query` language accepts `closed>=2026-09-07T12:00:00Z`; the timestamp is
-  `now - closedDays`); if a server ever rejects that expression with `400`, bddb falls back to
+  `now - closedHours`); if a server ever rejects that expression with `400`, bddb falls back to
   `issues?status=<done names>&limit=0&brief=true` filtered by `closed_at` client-side.
 - `dependency_count` / `dependent_count` follow the **list** semantics of `GET issues`, which
   counts blocking edges only (`blocks`, `conditional-blocks`, `waits-for`; `parent-child` and
@@ -176,7 +179,7 @@ OpenAPI spec (`spec/openapi.v0.yaml`), everything else → `400 bddb_invalid_arg
 
 | Method, path | Upstream |
 |---|---|
-| `GET /api/p/<db>/issues?…` | `GET /v0/beads/issues` (same params; used for "show all closed", pagination) |
+| `GET /api/p/<db>/issues?…` | `GET /v0/beads/issues` (same params; generic list access with pagination; the SPA currently does not use it for closed issues) |
 | `GET /api/p/<db>/issues/<id>?include_comments=true&include_dependents=true` | `GET /v0/beads/issues/{id}` → `IssueDetails` (source of `revision`) |
 | `GET /api/p/<db>/issues:query?q=…&…` | `GET /v0/beads/issues:query` (`400 param=q` passes through) |
 | `GET /api/p/<db>/ready?…` | `GET /v0/beads/ready` |

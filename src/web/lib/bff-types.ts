@@ -43,7 +43,8 @@ export interface Meta {
   bddb: { version: string; builtForBeads: string };
   defaultDatabase: string;
   actorDefault: string;
-  closedDays: number;
+  /** Hours of closed history the server keeps in the snapshot (`BDDB_CLOSED_HOURS`). */
+  closedHours: number;
   pollIntervalMs: number;
   databases: DatabaseInfo[];
 }
@@ -57,6 +58,8 @@ export interface DatabaseInfo {
   projectId: string | null;
   versionWarning: string | null;
   capabilities: string[];
+  /** Rows in the `issues` table when bddb discovered the database (startup); not kept live. */
+  issueCount: number;
   /** Why the database is `down` / `degraded` (supervisor reason + last `bd serve` line). */
   lastError?: string | null;
 }

@@ -8,7 +8,13 @@
  */
 import path from "node:path";
 import type { Config } from "./config.ts";
-import { DiscoveryError, discoverDatabases, doltConnection } from "./discovery.ts";
+import {
+  type DiscoveredDatabase,
+  describeDatabases,
+  discoverDatabases,
+  doltConnection,
+  pickDefaultDatabase,
+} from "./discovery.ts";
 import type { Logger } from "./log.ts";
 import { checkBd } from "./preflight.ts";
 import { jsonResponse, problemResponse } from "./problem.ts";
@@ -41,8 +47,8 @@ const MAX_REQUEST_BODY_SIZE = MAX_BODY_BYTES + 64 * 1024;
 export interface CreateAppOptions {
   config: Config;
   log: Logger;
-  /** Skip discovery and use these names (tests). */
-  databases?: string[];
+  /** Skip discovery and use these databases (tests); a bare name counts as `issueCount: 0`. */
+  databases?: (string | DiscoveredDatabase)[];
 }
 
 export async function createApp(options: CreateAppOptions): Promise<App> {
@@ -51,26 +57,21 @@ export async function createApp(options: CreateAppOptions): Promise<App> {
   const bd = await checkBd(config.bdPath);
   if (bd.warning) log.warn(bd.warning);
   log.info(`bd: ${bd.raw} (${config.bdPath}); dolt: ${config.doltHost}:${config.doltPort}`);
-  const names =
-    options.databases ??
-    (await discoverDatabases({ connection: doltConnection(config), requested: config.databases }));
-  const defaultDatabase = config.defaultDatabase ?? names[0];
-  if (!defaultDatabase || !names.includes(defaultDatabase)) {
-    throw new DiscoveryError(
-      `BDDB_DEFAULT_DATABASE ${JSON.stringify(config.defaultDatabase)} is not among the served databases`,
-      [`databases: ${names.join(", ")}`],
-    );
-  }
-  log.info("databases", { databases: names.join(","), default: defaultDatabase });
+  const discovered: DiscoveredDatabase[] = options.databases
+    ? options.databases.map((d) => (typeof d === "string" ? { name: d, issueCount: 0 } : d))
+    : await discoverDatabases({ connection: doltConnection(config), requested: config.databases });
+  // BDDB_DEFAULT_DATABASE when set, else the largest database (beads_global only when alone).
+  const defaultDatabase = pickDefaultDatabase(discovered, config.defaultDatabase);
+  log.info(`databases: ${describeDatabases(discovered)}`, { default: defaultDatabase });
 
   const root = workspaceRoot(config.workDir);
   const runtimes = new Map<string, DatabaseRuntime>();
   const releases: (() => Promise<void>)[] = [];
   try {
-    for (const name of names) {
+    for (const { name, issueCount } of discovered) {
       const ws = await ensureWorkspace({ root, database: name, log });
       releases.push(ws.release);
-      runtimes.set(name, new DatabaseRuntime({ name, wsDir: ws.dir, config, log }));
+      runtimes.set(name, new DatabaseRuntime({ name, wsDir: ws.dir, config, log, issueCount }));
     }
   } catch (err) {
     await Promise.all(releases.map((release) => release()));
@@ -146,7 +147,7 @@ export interface RuntimeView {
 }
 
 export interface HandlerContext {
-  config: Pick<Config, "basePath" | "actor" | "closedDays" | "pollIntervalMs">;
+  config: Pick<Config, "basePath" | "actor" | "closedHours" | "pollIntervalMs">;
   log: Logger;
   runtimes: Map<string, RuntimeView>;
   defaultDatabase: string;
@@ -193,7 +194,7 @@ export function createHandler(ctx: HandlerContext): (request: Request) => Promis
     bddb: { version: BDDB_VERSION, builtForBeads: BUILT_FOR_BEADS },
     defaultDatabase: ctx.defaultDatabase,
     actorDefault: config.actor,
-    closedDays: config.closedDays,
+    closedHours: config.closedHours,
     pollIntervalMs: config.pollIntervalMs,
     databases: [...runtimes.values()].map((r) => ({ ...r.info })),
   });

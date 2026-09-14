@@ -1,10 +1,13 @@
 /**
- * Kanban board: filter toolbar, one column per status of the snapshot; grouped into swimlanes
- * per top epic by default (`prefs.groupByEpic`), drilled into one epic with `?epic=<id>`.
+ * Kanban board: filter toolbar, one column per visible status (board settings, `lib/columns.ts`:
+ * the chosen columns and the closed window narrow the snapshot rows); grouped into swimlanes
+ * per top epic by default (`prefs.groupByEpic`), drilled into one epic with `?epic=<id>`. Query
+ * mode shows exactly the result set: every status it contains, no closed window.
  */
 import { useComputed } from "@preact/signals";
 import type { JSX } from "preact";
 import { useEffect } from "preact/hooks";
+import { openSettings } from "../components/BoardSettings.tsx";
 import { Breadcrumbs, type Crumb } from "../components/Breadcrumbs.tsx";
 import { Column } from "../components/Column.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
@@ -13,9 +16,9 @@ import { databaseHints } from "../components/StatusBanners.tsx";
 import { GroupToggle, ProgressBar, SwimlaneBoard } from "../components/Swimlane.tsx";
 import { clearFilters, Toolbar } from "../components/Toolbar.tsx";
 import { t } from "../i18n/index.ts";
-import { loadAllClosed } from "../lib/api.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
 import { doneStatuses, groupByStatus } from "../lib/board.ts";
+import { boardRows, effectiveClosedHours, visibleStatuses } from "../lib/columns.ts";
 import { useBoardDnd } from "../lib/dnd.ts";
 import { isFilterEmpty, matchesFilters } from "../lib/filters.ts";
 import type { Lane as DropLaneOf } from "../lib/hierarchy.ts";
@@ -30,7 +33,7 @@ import {
 import { isRetryable, refetchSnapshot } from "../lib/live.ts";
 import { openCreate } from "../state/create.ts";
 import { databases, meta } from "../state/meta.ts";
-import { groupByEpic, setGroupByEpic } from "../state/prefs.ts";
+import { groupByEpic, setGroupByEpic, storedClosedHours, storedColumns } from "../state/prefs.ts";
 import { queryIssues, queryLoading, queryResult } from "../state/query.ts";
 import { filters, hrefFor, onLinkClick, updateFilters } from "../state/route.ts";
 import { clearSelection, selection } from "../state/selection.ts";
@@ -41,29 +44,10 @@ import {
   boardError,
   boardLoading,
   dbInfo,
-  extraClosed,
-  extraClosedLoaded,
-  extraClosedLoading,
   hierarchy,
+  now,
 } from "../state/snapshot.ts";
-import { describeError, toastError } from "../state/toasts.ts";
-
-async function showAllClosed(db: string): Promise<void> {
-  if (extraClosedLoading.value || extraClosedLoaded.value) return;
-  extraClosedLoading.value = true;
-  try {
-    const rows = await loadAllClosed(db, doneStatuses(board.value.statuses));
-    if (boardDb.value !== db) return;
-    const map = new Map<string, BoardIssue>();
-    for (const row of rows) map.set(row.id, { ...row, blocked: false });
-    extraClosed.value = map;
-    extraClosedLoaded.value = true;
-  } catch (err) {
-    toastError(err);
-  } finally {
-    extraClosedLoading.value = false;
-  }
-}
+import { describeError } from "../state/toasts.ts";
 
 export function BoardView({ db }: { db: string }): JSX.Element {
   const info = dbInfo.value ?? databases.value.find((d) => d.name === db) ?? null;
@@ -81,13 +65,21 @@ export function BoardView({ db }: { db: string }): JSX.Element {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  // Query mode replaces the issue set with the `issues:query` result (live rows where present).
-  const source = useComputed(() => queryIssues.value ?? allIssues.value);
-  const visible = useComputed(() => {
-    const f = filters.value;
-    const rows = source.value;
-    return isFilterEmpty(f) ? rows : rows.filter((row) => matchesFilters(row, f));
-  });
+  // Query mode replaces the issue set with the `issues:query` result (live rows where present)
+  // and shows it whole; otherwise the board settings decide the columns and the closed window.
+  // Plain derivations (not `useComputed`): they depend on `db` and on per-database preferences,
+  // and every signal read here re-renders the view when it changes.
+  const source = queryIssues.value ?? allIssues.value;
+  const closedHours = effectiveClosedHours(storedClosedHours(db), meta.value?.closedHours ?? 72);
+  const boardColumns = queryIssues.value
+    ? groupByStatus(queryIssues.value, state.statuses).columns
+    : visibleStatuses(state.statuses, storedColumns(db));
+  const scope = queryIssues.value
+    ? source
+    : boardRows(source, boardColumns, closedHours, now.value);
+  const visible = isFilterEmpty(filters.value)
+    ? scope
+    : scope.filter((row) => matchesFilters(row, filters.value));
   const assignees = useComputed(() => {
     const out = new Set<string>();
     for (const row of allIssues.value) if (row.assignee) out.add(row.assignee);
@@ -149,9 +141,8 @@ export function BoardView({ db }: { db: string }): JSX.Element {
     }
   }
 
-  const closedDays = meta.value?.closedDays ?? 7;
   const inQuery = queryResult.value !== null;
-  const total = source.value.length;
+  const total = scope.length;
   const filtered = !isFilterEmpty(filters.value);
   const index = hierarchy.value;
   const epicId = filters.value.epic;
@@ -164,28 +155,24 @@ export function BoardView({ db }: { db: string }): JSX.Element {
   // Drill-down: only the descendants of the epic; lanes by sub-epic when there are any.
   const inScope = (row: BoardIssue) =>
     !epicId || (row.id !== epicId && isUnder(index, row.id, epicId));
-  const scoped = visible.value.filter(inScope);
-  const scopeTotal = epicId ? source.value.filter(inScope).length : total;
+  const scoped = visible.filter(inScope);
+  const scopeTotal = epicId ? scope.filter(inScope).length : total;
   const parentIdOf = (lane: DropLaneOf) => lane.epic?.id ?? (epicId || "");
   const lanes: Lane[] | null = !grouped
     ? null
     : epicId
       ? groupBySubEpic(scoped, index, epicId)
       : groupByTopEpic(scoped, index);
-  const { columns, byStatus } = groupByStatus(scoped, state.statuses);
+  const { columns, byStatus } = groupByStatus(scoped, boardColumns);
 
   const columnExtras = (status: StatusDef) => ({
-    closedDays: status.category === "done" ? closedDays : undefined,
-    showAll:
-      status.category === "done"
-        ? {
-            loaded: extraClosedLoaded.value,
-            loading: extraClosedLoading.value,
-            total: null,
-            onLoad: () => void showAllClosed(db),
-          }
-        : undefined,
+    closedHours: status.category === "done" && !inQuery ? closedHours : undefined,
   });
+  const chooseColumns = {
+    label: t("board.noColumns.action"),
+    onClick: openSettings,
+    testId: "board-choose-columns",
+  };
 
   let crumbs: Crumb[] | null = null;
   if (epicId) {
@@ -271,7 +258,7 @@ export function BoardView({ db }: { db: string }): JSX.Element {
           }
           testId="query-empty"
         />
-      ) : total === 0 ? (
+      ) : source.length === 0 ? (
         <EmptyState
           title={t("board.empty.none.title")}
           body={t("board.empty.none")}
@@ -281,6 +268,20 @@ export function BoardView({ db }: { db: string }): JSX.Element {
             testId: "board-empty-create",
           }}
           testId="board-empty"
+        />
+      ) : boardColumns.length === 0 ? (
+        <EmptyState
+          title={t("board.noColumns.title")}
+          body={t("board.noColumns", { db })}
+          action={chooseColumns}
+          testId="board-no-columns"
+        />
+      ) : total === 0 ? (
+        <EmptyState
+          title={t("board.hiddenAll.title")}
+          body={t("board.hiddenAll")}
+          action={chooseColumns}
+          testId="board-hidden-all"
         />
       ) : epicId && scoped.length === 0 ? (
         <EmptyState

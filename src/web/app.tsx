@@ -4,6 +4,7 @@
  */
 import { useSignalEffect } from "@preact/signals";
 import { useEffect } from "preact/hooks";
+import { toggleSettings } from "./components/BoardSettings.tsx";
 import { CreateIssueModal } from "./components/CreateIssueModal.tsx";
 import { DetailPanel } from "./components/DetailPanel.tsx";
 import { DialogHost } from "./components/Dialog.tsx";
@@ -19,12 +20,12 @@ import { connectLive, disconnectLive } from "./lib/live.ts";
 import { createRequest, openCreate } from "./state/create.ts";
 import { dialog } from "./state/dialogs.ts";
 import { databases, loadMeta, meta, metaError, metaLoading } from "./state/meta.ts";
-import { currentDb, filters, navigate, route } from "./state/route.ts";
+import { currentDb, drawerOpen, filters, navigate, route } from "./state/route.ts";
 import { describeError } from "./state/toasts.ts";
 import { BoardView } from "./views/BoardView.tsx";
 import { EpicsView } from "./views/EpicsView.tsx";
 
-/** `/`, `n`, `?` on the page; dialogs handle their own Escape (capture phase) before this. */
+/** `/`, `n`, `?`, `,` on the page; dialogs handle their own Escape (capture phase) before this. */
 function useGlobalShortcuts(): void {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -44,13 +45,18 @@ function useGlobalShortcuts(): void {
           return;
         }
         case "newIssue":
-          if (!db || route.value.kind === "issue") return;
+          if (!db || drawerOpen.value) return;
           event.preventDefault();
           openCreate(filters.value.epic ? { parent: filters.value.epic } : {});
           return;
         case "help":
           event.preventDefault();
           toggleHelp();
+          return;
+        case "settings":
+          if (!db) return;
+          event.preventDefault();
+          toggleSettings();
           return;
         default:
           return;
@@ -148,7 +154,7 @@ export function App() {
         }}
       />
     );
-  } else if (r.kind === "epics") {
+  } else if (r.kind === "epics" || r.kind === "epicsIssue") {
     content = <EpicsView db={r.db} />;
   } else {
     pageTitle = `${t("nav.board")} — ${r.db}`;
@@ -162,9 +168,13 @@ export function App() {
       <VersionBanner />
       <DatabaseBanner />
       <main class="main">
-        {r.kind === "epics" ? null : <h1 class="sr-only">{pageTitle}</h1>}
+        {r.kind === "epics" || r.kind === "epicsIssue" ? null : (
+          <h1 class="sr-only">{pageTitle}</h1>
+        )}
         {content}
-        {r.kind === "issue" ? <DetailPanel db={r.db} id={r.issueId} /> : null}
+        {r.kind === "issue" || r.kind === "epicsIssue" ? (
+          <DetailPanel db={r.db} id={r.issueId} />
+        ) : null}
       </main>
       {"db" in r ? <CreateIssueModal db={r.db} /> : null}
       <DialogHost />

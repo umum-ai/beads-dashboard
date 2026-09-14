@@ -92,6 +92,8 @@ export interface OptimisticPatch {
   /** `null` / `""` clear; `undefined` (key absent) leaves the field alone. */
   parent?: string | null | undefined;
   assignee?: string | null | undefined;
+  /** Set when closing: the Closed column only shows rows with a `closed_at` in its window. */
+  closed_at?: string | null | undefined;
 }
 
 /**
@@ -118,6 +120,10 @@ export function applyOptimisticTo(
     else delete next.assignee;
   }
   if (patch.labels !== undefined) next.labels = patch.labels;
+  if ("closed_at" in patch) {
+    if (patch.closed_at) next.closed_at = patch.closed_at;
+    else delete next.closed_at;
+  }
   const issues = new Map(state.issues);
   issues.set(id, next);
   return { state: { ...state, issues }, previous };

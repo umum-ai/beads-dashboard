@@ -12,7 +12,7 @@ import { typeGlyph } from "../../lib/issue-meta.ts";
 import { renderMarkdown } from "../../lib/markdown.ts";
 import { formatDateTime } from "../../lib/time.ts";
 import { actor } from "../../state/meta.ts";
-import { navigate } from "../../state/route.ts";
+import { detailRoute, navigate } from "../../state/route.ts";
 import { pushToast, toastError } from "../../state/toasts.ts";
 import { statusLabel } from "../Column.tsx";
 import { IssuePicker } from "../editors/IssuePicker.tsx";
@@ -123,11 +123,7 @@ function RelList({
     <ul class="rel-list" data-testid={testId}>
       {rows.map((row) => (
         <li key={`${row.dependency_type ?? ""}:${row.id}`} class="rel-row" data-id={row.id}>
-          <button
-            type="button"
-            class="rel"
-            onClick={() => navigate({ kind: "issue", db, issueId: row.id })}
-          >
+          <button type="button" class="rel" onClick={() => navigate(detailRoute(db, row.id))}>
             <span aria-hidden="true">{typeGlyph(row.issue_type)}</span>
             <span class="mono">{row.id}</span>
             <span class="rel__title ellipsis" title={row.title}>

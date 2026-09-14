@@ -182,6 +182,20 @@ describe("optimistic rows", () => {
     expect(guessed.updated_at).not.toBe(row().updated_at);
   });
 
+  test("a close guess stamps closed_at so the row lands in the Closed window; reopen clears it", () => {
+    const state = { ...emptyBoardState(), issues: new Map([["kb-1", row()]]) };
+    const closed = applyOptimisticTo(state, "kb-1", {
+      status: "closed",
+      closed_at: "2026-09-15T10:00:00.000Z",
+    }).state;
+    expect(closed.issues.get("kb-1")?.closed_at).toBe("2026-09-15T10:00:00.000Z");
+    const reopened = applyOptimisticTo(closed, "kb-1", { status: "open", closed_at: null }).state;
+    expect("closed_at" in (reopened.issues.get("kb-1") as BoardIssue)).toBe(false);
+    // a patch without the key leaves the stamp alone
+    const other = applyOptimisticTo(closed, "kb-1", { priority: 1 }).state;
+    expect(other.issues.get("kb-1")?.closed_at).toBe("2026-09-15T10:00:00.000Z");
+  });
+
   test("an unknown id is left alone", () => {
     const state = emptyBoardState();
     const out = applyOptimisticTo(state, "nope", { status: "x" });

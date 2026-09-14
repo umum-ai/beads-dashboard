@@ -12,6 +12,7 @@ const snapshot: Snapshot = {
     bdVersion: null,
     projectId: null,
     versionWarning: null,
+    issueCount: 0,
     capabilities: [],
   },
   statuses: [],

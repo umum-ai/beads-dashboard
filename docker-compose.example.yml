@@ -18,11 +18,11 @@ services:
       BDDB_DOLT_USER: root
       # BDDB_DOLT_PASSWORD: ""              # set when your dolt user has one
       # BDDB_DATABASES: shared,siam         # CSV; unset = discover every database with an `issues` table
-      # BDDB_DEFAULT_DATABASE: shared       # board opened at `/`; default: first database
+      # BDDB_DEFAULT_DATABASE: shared       # board opened at `/`; default: the largest database
       # BDDB_BASE_PATH: /beads              # when served behind a reverse proxy under a prefix
       # BDDB_ACTOR: bddb                    # default `actor` for writes when the UI has none
       # BDDB_POLL_INTERVAL: 15s             # full re-read interval (fallback for workspaces without the journal)
-      # BDDB_CLOSED_DAYS: "7"               # window of closed issues shown on the board
+      # BDDB_CLOSED_HOURS: "72"             # closed window on the board, hours (1-720)
       # BDDB_LOG_LEVEL: info                # debug | info | warn | error
       # BDDB_LOG_FORMAT: text               # text | json
     extra_hosts:

@@ -13,7 +13,9 @@ with the owner's decisions lives in `tmp/PLAN.md` (not committed, `tmp/` is git-
   `dolt` (`aqua:dolthub/dolt`), actionlint, hadolint.
 - Data access: only the `bd serve` HTTP API (`/v0/beads/...`). No direct SQL against issue
   tables, no `bd --json` as a data source. `Bun.SQL` over the MySQL protocol is used solely
-  for database discovery (`SHOW DATABASES`).
+  for database discovery (`SHOW DATABASES`, `information_schema.tables`, and one
+  `SELECT COUNT(*) FROM <db>.issues` per database — the count only orders the list, picks the
+  default database and fills `DatabaseInfo.issueCount`; never read issue rows over SQL).
 
 ## Commands
 
@@ -71,7 +73,7 @@ instance: two bddb processes sharing `<work-dir>/<db>` would also share the prox
 
 | Path | Contents |
 |---|---|
-| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals, startup error reporting: exit 2 with hints for config / discovery / preflight, 1 otherwise), `preflight.ts` (`bd` present and supported before anything starts), `app.ts` (routes, startup log lines), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime, `DatabaseInfo.lastError`), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `errors.ts` (`StartupError`, import-cycle free), `types.ts` (wire types of docs/bff-api.md) |
+| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals, startup error reporting: exit 2 with hints for config / discovery / preflight, 1 otherwise), `preflight.ts` (`bd` present and supported before anything starts), `app.ts` (routes, startup log lines), `config.ts`, `discovery.ts` (Bun.SQL: list, `issues` row count per database, `rankDatabases` / `pickDefaultDatabase`), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime, `DatabaseInfo.lastError`), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `errors.ts` (`StartupError`, import-cycle free), `types.ts` (wire types of docs/bff-api.md) |
 | `src/web/` | Preact SPA (`index.html`, `main.tsx`); layout in `docs/ui.md`. Keyboard: `lib/keyboard.ts` (pure) + `lib/board-keys.ts`; dialogs use `lib/focus-trap.ts`; states in `components/EmptyState.tsx`, `StatusBanners.tsx`; `lib/contrast.ts` backs the WCAG unit test |
 | `src/api-client/` | Types generated from the spec, HTTP client, Problem handling, capability gating |
 | `spec/openapi.v0.yaml` | Pinned copy of the `bd serve` OpenAPI spec for the supported beads version. Source of truth for the contract; never hand-edit |

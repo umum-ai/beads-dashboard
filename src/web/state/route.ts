@@ -2,7 +2,14 @@
 import { computed, signal } from "@preact/signals";
 import { basePath, stripBase, withBase } from "../lib/basePath.ts";
 import { EMPTY_FILTERS, type Filters, parseFilters, serializeFilters } from "../lib/filters.ts";
-import { parseRoute, type Route, routeDb, routePath } from "../lib/router.ts";
+import {
+  closeRouteOf,
+  detailRouteIn,
+  parseRoute,
+  type Route,
+  routeDb,
+  routePath,
+} from "../lib/router.ts";
 
 function readLocation(): { route: Route; filters: Filters } {
   if (typeof location === "undefined") return { route: { kind: "home" }, filters: EMPTY_FILTERS };
@@ -16,6 +23,20 @@ const initial = readLocation();
 export const route = signal<Route>(initial.route);
 export const filters = signal<Filters>(initial.filters);
 export const currentDb = computed(() => routeDb(route.value));
+/** The drawer is open (board or epics view). */
+export const drawerOpen = computed(
+  () => route.value.kind === "issue" || route.value.kind === "epicsIssue",
+);
+
+/** Drawer route for `issueId` in the current view: links inside the drawer stay where they are. */
+export function detailRoute(db: string, issueId: string): Route {
+  return detailRouteIn(route.value, db, issueId);
+}
+
+/** Route the drawer returns to when closed (the current view, filters kept by `navigate`). */
+export function closeRoute(db: string): Route {
+  return closeRouteOf(route.value, db);
+}
 
 function sync(): void {
   const next = readLocation();

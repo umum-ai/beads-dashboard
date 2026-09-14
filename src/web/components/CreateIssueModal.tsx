@@ -11,7 +11,7 @@ import { PRIORITIES } from "../lib/board.ts";
 import { trapFocus } from "../lib/focus-trap.ts";
 import { closeCreate, createRequest } from "../state/create.ts";
 import { actor } from "../state/meta.ts";
-import { navigate } from "../state/route.ts";
+import { detailRoute, navigate } from "../state/route.ts";
 import { allIssues, board } from "../state/snapshot.ts";
 import { describeError, pushToast } from "../state/toasts.ts";
 import { typeLabel } from "./Card.tsx";
@@ -101,7 +101,7 @@ function CreateForm({
       const created = await api.createIssue(db, body);
       closeCreate();
       pushToast("success", t("create.done", { id: created.id }), 3000);
-      navigate({ kind: "issue", db, issueId: created.id });
+      navigate(detailRoute(db, created.id));
     } catch (err) {
       setError(describeError(err));
     } finally {

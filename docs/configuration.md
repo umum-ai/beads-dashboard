@@ -14,11 +14,11 @@ and exit code 2 (`bddb: BDDB_PORT must be an integer between 1 and 65535, got "7
 | `BDDB_DOLT_PORT` | `--dolt-port` | `3308` | Dolt MySQL port (`3308` is the beads shared-server default; `bd init --server` defaults to `3307`). |
 | `BDDB_DOLT_USER` | `--dolt-user` | `root` | Dolt MySQL user, used for discovery and passed to `bd serve` as `BEADS_DOLT_SERVER_USER`. |
 | `BDDB_DOLT_PASSWORD` | `--dolt-password` | (empty) | Dolt password, passed to `bd serve` as `BEADS_DOLT_PASSWORD`. Prefer the environment over the flag (flags show up in `ps`). |
-| `BDDB_DATABASES` | `--databases` | auto-discovery | CSV of database names to serve, in this order. Each must exist and contain an `issues` table; otherwise startup fails listing what exists. Unset → [discovery](#database-discovery). |
-| `BDDB_DEFAULT_DATABASE` | `--default-database` | first served | Project `/` redirects to. Must be one of the served databases. |
+| `BDDB_DATABASES` | `--databases` | auto-discovery | CSV of database names to serve, listed in this order. Each must exist and contain an `issues` table; otherwise startup fails listing what exists. Unset → [discovery](#database-discovery), which orders the list by size. |
+| `BDDB_DEFAULT_DATABASE` | `--default-database` | the largest database | Project `/` redirects to (`Meta.defaultDatabase`). Must be one of the served databases. Unset → the database with the most rows in its `issues` table at startup, whether the list came from discovery or from `BDDB_DATABASES` (ties → the first in list order; `beads_global` only when it is the only database). |
 | `BDDB_ACTOR` | `--actor` | `bddb` | `actor` (and comment `author`) filled into write requests that carry none. ≤ 256 bytes, no control characters. The UI sends its own actor; this is the fallback. |
 | `BDDB_POLL_INTERVAL` | `--poll-interval` | `15s` | Interval of the full re-read that runs regardless of the events journal. Durations: `500ms`, `15s`, `2m`, `1h`, `1m30s`; a bare number is seconds. Minimum `1s`. |
-| `BDDB_CLOSED_DAYS` | `--closed-days` | `7` | Closed issues newer than this many days are part of the board snapshot; older ones are fetched on demand. `0` shows none. |
+| `BDDB_CLOSED_HOURS` | `--closed-hours` | `72` | Closed (done-category) issues whose `closed_at` is within the last N hours are part of the board snapshot (`Meta.closedHours`); older ones are fetched on demand. Integer, `1`–`720`. This is the server-side upper bound: the UI lets the user narrow the Done column to 1–72 h within it. |
 | `BDDB_BD_PATH` | `--bd-path` | `bd` | Path to the `bd` binary used for `bd serve` (and `bd version` in `doctor`). |
 | `BDDB_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, `error`. `debug` includes every `bd serve` request line. |
 | `BDDB_LOG_FORMAT` | `--log-format` | `text` | `text` (human) or `json` (one object per line: `ts`, `level`, `msg`, fields). |
@@ -27,10 +27,12 @@ and exit code 2 (`bddb: BDDB_PORT must be an integer between 1 and 65535, got "7
 
 Logging goes to stderr. `bd serve` output is forwarded with a `[bd:<database>]` prefix
 (request lines at `debug`, errors at `warn`). At start bddb prints one line for the `bd` it
-found, the `dashboard: http://…/` URL to open (the loopback address when bound to `0.0.0.0`)
-and one line per database (`database kb: starting (starting bd serve)` → `database kb: bd serve
-127.0.0.1:<port> (bd 1.3.0-rc.2), loading snapshot` → `database kb: ready — 5 issues, live
-sse`); a database that dies logs `database kb: down — bd serve process exited (exit 137): …`.
+found, the databases with their `issues` row counts and the default (`databases: shared (312),
+siam (75) default=shared`), the `dashboard: http://…/` URL to open (the loopback address when
+bound to `0.0.0.0`) and one line per database (`database kb: starting (starting bd serve)` →
+`database kb: bd serve 127.0.0.1:<port> (bd 1.3.0-rc.2), loading snapshot` →
+`database kb: ready — 5 issues, live sse`); a database that dies logs `database kb: down — bd
+serve process exited (exit 137): …`.
 
 ## Startup failures
 
@@ -43,6 +45,7 @@ exit **1** with a stack trace. Verified messages:
 | invalid value | `bddb: BDDB_PORT must be an integer between 1 and 65535, got "70000"` → `see bddb help and docs/configuration.md` |
 | dolt unreachable (wrong host/port, not running, firewalled) | `bddb: cannot start: cannot query dolt at 127.0.0.1:3798 as root: Failed to connect` → `is dolt sql-server running and reachable from here? (try bddb doctor)`, `from a container the host's dolt must listen on 0.0.0.0 … or use --network host`, `check BDDB_DOLT_USER / BDDB_DOLT_PASSWORD` |
 | `BDDB_DATABASES` names a missing database | `bddb: cannot start: BDDB_DATABASES names a database that does not exist on the dolt server: nope` → `databases present: kb` |
+| `BDDB_DEFAULT_DATABASE` is not served | `bddb: cannot start: BDDB_DEFAULT_DATABASE "nope" is not among the served databases` → `databases: shared, siam` |
 | a named database has no `issues` table | `… names a database without an issues table (not a beads database?): x` → `beads databases present: …` |
 | nothing to serve (auto-discovery) | `bddb: cannot start: no beads database found on the dolt server` → `databases present but without an issues table: …` / `the server has no user databases at all`, `is this the right dolt? check BDDB_DOLT_HOST / BDDB_DOLT_PORT (shared-server default: 3308)`, `a beads workspace must have been initialised in server mode against it (bd init --server / --shared-server)`, `or list databases explicitly with BDDB_DATABASES=name1,name2` |
 | `bd` missing | `bddb: cannot start: cannot run "/nonexistent version": bd binary not found or not executable` → `install beads (…) so that bd is in PATH, or set BDDB_BD_PATH`, `the release binary and a source checkout need bd and git on the host; the container image already carries both`, `bddb doctor runs this and the other startup checks` |
@@ -56,10 +59,21 @@ A database that becomes unreachable *after* start is not a startup failure: it i
 ## Database discovery
 
 When `BDDB_DATABASES` is unset, bddb connects to Dolt over the MySQL protocol with the
-credentials above, runs `SHOW DATABASES`, drops `information_schema`, `mysql` and `dolt`, keeps
-the databases that own a table called `issues`, and puts `beads_global` (the shared-server
-global database) last. The list is fixed at startup — one `bd serve` process serves one
-database, so adding a database means restarting bddb.
+credentials above, runs `SHOW DATABASES`, drops `information_schema`, `mysql` and `dolt`, and
+keeps the databases that own a table called `issues`. It then counts the rows of every
+selected database (`SELECT COUNT(*) FROM <db>.issues`, one query per database over the same
+connection) and orders the list largest first; `beads_global` (the shared-server global
+database) goes last whatever its size. The list is fixed at startup — one `bd serve` process
+serves one database, so adding a database means restarting bddb.
+
+The counts also pick the **default database** when `BDDB_DEFAULT_DATABASE` is unset: the
+largest one (ties → the first in list order; `beads_global` only when nothing else is served).
+With `BDDB_DATABASES` the list keeps the operator's order, but the default is still the
+largest — set `BDDB_DEFAULT_DATABASE` to pin it. The counts are reported as
+`DatabaseInfo.issueCount` in `GET /api/meta`, in the startup log line (`databases: shared
+(312), siam (75), beads_global (3) default=shared`) and in `bddb doctor` (`databases  shared
+(312), siam (75), beads_global (3)` and `default database  shared (largest; set
+BDDB_DEFAULT_DATABASE to override)`). They are taken once at startup and not kept live.
 
 An empty result stops the process with hints: check `BDDB_DOLT_HOST` / `BDDB_DOLT_PORT`, make sure
 a workspace was initialised in server mode against this Dolt (`bd init --server` /
@@ -94,7 +108,10 @@ loopback port (`127.0.0.1:<random>`) — those are never meant to be reached dir
 # Host install, shared-server dolt on the default port, everything auto-discovered
 BDDB_DOLT_HOST=127.0.0.1 bddb serve
 
-# Explicit databases, custom port, behind nginx at /beads
+# The same, with a one-day closed window on the board instead of the default 72 h
+BDDB_DOLT_HOST=127.0.0.1 BDDB_CLOSED_HOURS=24 bddb serve
+
+# Explicit databases (siam pinned as default — otherwise the largest wins), custom port, nginx at /beads
 bddb serve --dolt-host 127.0.0.1 --databases shared,siam --default-database siam \
   --port 8080 --base-path /beads
 

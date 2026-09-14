@@ -172,23 +172,3 @@ function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
 }
-
-/** Load every done-category issue (`all=true`) following `next_cursor` while `has_more`. */
-export async function loadAllClosed(database: string, statuses: string[]) {
-  const items: IssueListResponse["items"] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 50; page++) {
-    const params: Record<string, string | number | boolean | string[]> = {
-      status: statuses,
-      all: true,
-      limit: 0,
-      brief: true,
-    };
-    if (cursor) params.cursor = cursor;
-    const res = await api.issues(database, params);
-    items.push(...res.items);
-    if (!res.has_more || !res.next_cursor) break;
-    cursor = res.next_cursor;
-  }
-  return items;
-}

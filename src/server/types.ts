@@ -24,6 +24,8 @@ export interface DatabaseInfo {
   projectId: string | null;
   versionWarning: string | null;
   capabilities: string[];
+  /** Rows in the `issues` table when bddb discovered the database (startup); not kept live. */
+  issueCount: number;
   /**
    * Why the database is `down` / `degraded`: the supervisor's exit reason plus the last line
    * `bd serve` printed, or the upstream problem detail. `null` while `ready`.
@@ -35,7 +37,7 @@ export interface Meta {
   bddb: { version: string; builtForBeads: string };
   defaultDatabase: string;
   actorDefault: string;
-  closedDays: number;
+  closedHours: number;
   pollIntervalMs: number;
   databases: DatabaseInfo[];
 }

@@ -4,7 +4,7 @@
  * `Delta`, and apply journal `EventRecord`s incrementally.
  *
  * Scope (docs/bff-api.md): every issue not hidden by `bd serve` defaults in active/wip/frozen
- * statuses, plus done-category issues whose `closed_at` is within `closedDays`.
+ * statuses, plus done-category issues whose `closed_at` is within the last `closedHours` hours.
  */
 import {
   type BdClient,
@@ -209,8 +209,8 @@ export function inScope(
   return Number.isNaN(closed) ? true : closed >= closedSince.getTime();
 }
 
-export function closedSince(closedDays: number, now: Date = new Date()): Date {
-  return new Date(now.getTime() - closedDays * 86_400_000);
+export function closedSince(closedHours: number, now: Date = new Date()): Date {
+  return new Date(now.getTime() - closedHours * 3_600_000);
 }
 
 function stableStringify(value: unknown): string {
@@ -379,7 +379,7 @@ export function applyReady(state: StateData, ready: Set<string>): BoardIssue[] {
 // ---------------------------------------------------------------------------------------------
 
 export interface BaselineOptions {
-  closedDays: number;
+  closedHours: number;
   now?: Date;
   log: Logger;
   signal?: AbortSignal;
@@ -447,7 +447,7 @@ export async function fetchBaseline(
   const types = buildTypes(typesCustom.value);
   const frozen = statusNames(statuses, "frozen");
   const done = statusNames(statuses, "done");
-  const since = closedSince(options.closedDays, now);
+  const since = closedSince(options.closedHours, now);
 
   const [activePage, frozenPage, closedRows, readyPage, statsResult] = await Promise.all([
     client.listIssues({ limit: 0, brief: true }, reqOpts(signal)),

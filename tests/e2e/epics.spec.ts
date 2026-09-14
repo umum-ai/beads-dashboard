@@ -242,6 +242,48 @@ test("epics view: status chips, text filter, nested sub-epic expansion, blocked 
     .getByTestId("epic-title")
     .click();
   await expect(page.getByTestId("detail-panel")).toHaveAttribute("data-id", "sp-g1a.1.2");
+  // the drawer opened inside the epics view
+  await expect(page).toHaveURL(new RegExp(`/p/${DB}/epics/issue/sp-g1a\\.1\\.2$`));
+  await expect(page.getByTestId("epics-view")).toBeVisible();
+  await expect(page.getByTestId("tab-epics")).toHaveAttribute("aria-current", "page");
+});
+
+test("real: the epics view opens the drawer in place; its links and close stay on the epics tab", async ({
+  page,
+  request,
+}) => {
+  const { epic, kids } = await epicWithChildren(request);
+  await page.goto(`/p/${DB}/epics?q=${encodeURIComponent(epic.id)}`);
+  const row = page.locator(`[data-testid="epic-row"][data-id="${epic.id}"]`);
+  await expect(row).toBeVisible();
+  await row.getByTestId("epic-title").click();
+  const panel = page.getByTestId("detail-panel");
+  await expect(panel).toHaveAttribute("data-id", epic.id);
+  await expect(page).toHaveURL(
+    new RegExp(`/p/${DB}/epics/issue/${encodeURIComponent(epic.id).replace(/\./g, "\\.")}\\?q=`),
+  );
+  await expect(page.getByTestId("tab-epics")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("tab-board")).not.toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("epics-view")).toBeVisible();
+  // a child link inside the drawer keeps the epics view
+  const kid = kids[0] as Row;
+  await panel.getByTestId("detail-children").locator(`li[data-id="${kid.id}"] button`).click();
+  await expect(panel).toHaveAttribute("data-id", kid.id);
+  await expect(page).toHaveURL(new RegExp(`/p/${DB}/epics/issue/`));
+  await expect(page.getByTestId("epics-view")).toBeVisible();
+  // the parent crumb too
+  await panel.getByTestId("detail-crumbs").getByTestId("crumb").first().locator("a").click();
+  await expect(panel).toHaveAttribute("data-id", epic.id);
+  await expect(page).toHaveURL(new RegExp(`/p/${DB}/epics/issue/`));
+  // closing returns to the epics list with the filter kept and focus on the row's title
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(page).toHaveURL(new RegExp(`/p/${DB}/epics\\?q=`));
+  await expect(row.getByTestId("epic-title")).toBeFocused();
+  // a direct visit to the epics drawer URL works as well
+  await page.goto(`/p/${DB}/epics/issue/${encodeURIComponent(epic.id)}`);
+  await expect(page.getByTestId("detail-panel")).toHaveAttribute("data-id", epic.id);
+  await expect(page.getByTestId("epics-view")).toBeVisible();
 });
 
 test("real: the detail panel shows the hierarchy section with children and the dependency tree", async ({

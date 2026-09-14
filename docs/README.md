@@ -1,7 +1,7 @@
 # bddb documentation
 
-Start with the [README](../README.md) for the quick start and the limits (server-mode
-workspaces only, no authentication, events journal on the host for live CLI edits).
+Start with the [README](../README.md): requirements (server-mode workspaces, one shared Dolt,
+events journal on the host), install on the host or with Docker, the most used variables.
 
 | Document | Read it when |
 |---|---|
@@ -17,4 +17,5 @@ workspaces only, no authentication, events journal on the host for live CLI edit
 Contributing, security and the agents' operating manual live at the repository root:
 [CONTRIBUTING.md](../CONTRIBUTING.md), [SECURITY.md](../SECURITY.md), [AGENTS.md](../AGENTS.md).
 
-`screenshots/` holds the README images (`mise run screenshots` regenerates them from the mock).
+`screenshots/` holds the board screenshots — `board-light.png` (README) and `board-dark.png`
+(the same board in the dark theme); `mise run screenshots` regenerates them from the mock.

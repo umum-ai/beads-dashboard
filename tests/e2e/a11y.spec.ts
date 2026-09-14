@@ -11,7 +11,7 @@ const META = {
   bddb: { version: "0.0.0-test", builtForBeads: "1.3.0-rc.2" },
   defaultDatabase: DB,
   actorDefault: "bddb",
-  closedDays: 7,
+  closedHours: 72,
   pollIntervalMs: 15_000,
 };
 
@@ -24,6 +24,7 @@ const INFO = {
   projectId: null,
   versionWarning: null,
   capabilities: [] as string[],
+  issueCount: 0,
   lastError: null as string | null,
 };
 
@@ -226,6 +227,36 @@ test.describe("empty and error states", () => {
     await expect(page).toHaveURL(new RegExp(`/p/${DB}/board$`));
   });
 
+  test("an unknown issue id in the epics view goes back to the epics list", async ({ page }) => {
+    await page.goto(`/p/${DB}/epics/issue/nope-does-not-exist`);
+    const error = page.getByTestId("detail-panel").getByTestId("detail-error");
+    await expect(error).toBeVisible();
+    await expect(error.getByTestId("detail-back")).toHaveText("Back to epics");
+    await error.getByTestId("detail-back").click();
+    await expect(page.getByTestId("detail-panel")).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(`/p/${DB}/epics$`));
+    await expect(page.getByTestId("epics-view")).toBeVisible();
+  });
+
+  test("every column hidden: the board says so and opens the settings", async ({ page }) => {
+    await page.goto(`/p/${DB}/board`);
+    await expect(page.getByTestId("card").first()).toBeVisible();
+    await page.getByTestId("settings-button").click();
+    const pop = page.getByTestId("settings-popover");
+    const ids = await pop
+      .locator('[data-testid^="settings-column-"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid") ?? ""));
+    for (const id of ids) await pop.getByTestId(id).uncheck();
+    await page.keyboard.press("Escape");
+    const empty = page.getByTestId("board-no-columns");
+    await expect(empty).toBeVisible();
+    await expect(empty).toContainText("No columns shown");
+    await empty.getByTestId("board-choose-columns").click();
+    await expect(pop).toBeVisible();
+    await pop.getByTestId("settings-columns-reset").click();
+    await expect(page.getByTestId("card").first()).toBeVisible();
+  });
+
   test("epics view with no epics offers to create one", async ({ page }) => {
     // a snapshot without epics: intercept it and the stream
     await page.route(`**/api/p/${DB}/snapshot`, async (route) => {
@@ -391,6 +422,20 @@ test.describe("axe", () => {
     expect(await scan(page)).toEqual([]);
     await page.keyboard.press("?");
     await expect(page.getByTestId("help-dialog")).toBeVisible();
+    expect(await scan(page)).toEqual([]);
+  });
+
+  test("board settings popover and the epics drawer have no serious or critical violations", async ({
+    page,
+  }) => {
+    await page.goto(`/p/${DB}/board`);
+    await expect(page.getByTestId("card").first()).toBeVisible();
+    await page.getByTestId("settings-button").click();
+    await expect(page.getByTestId("settings-popover")).toBeVisible();
+    expect(await scan(page)).toEqual([]);
+    await page.goto(`/p/${DB}/epics`);
+    await page.getByTestId("epic-row").first().getByTestId("epic-title").click();
+    await expect(page.getByTestId("detail-panel").getByTestId("detail-title")).toBeVisible();
     expect(await scan(page)).toEqual([]);
   });
 

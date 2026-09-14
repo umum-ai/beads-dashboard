@@ -4,9 +4,15 @@
  *
  * Rules (plan 3.1): `BDDB_DATABASES` when set (each must exist); otherwise `SHOW DATABASES`
  * minus `information_schema`, `mysql`, `dolt`, keeping the databases that have an `issues`
- * table, `beads_global` last. An empty result is an error with hints.
+ * table. Every selected database is then counted (`SELECT COUNT(*) FROM <db>.issues`): the
+ * auto-discovered list is ordered by that count, largest first, `beads_global` last; an explicit
+ * list keeps the operator's order. The default database (when `BDDB_DEFAULT_DATABASE` is unset)
+ * is the largest one either way. An empty result is an error with hints.
  */
 import type { Config } from "./config.ts";
+
+/** The alphabet `parseCsv` accepts for `BDDB_DATABASES`; asserted before a name is interpolated. */
+export const DATABASE_NAME_RE = /^[A-Za-z0-9_$-]+$/;
 
 export const SYSTEM_DATABASES: ReadonlySet<string> = new Set([
   "information_schema",
@@ -24,12 +30,21 @@ export class DiscoveryError extends Error {
   }
 }
 
-/** The two queries discovery needs; a fake implements them in unit tests. */
+/** The three queries discovery needs; a fake implements them in unit tests. */
 export interface DoltProbe {
   showDatabases(): Promise<string[]>;
   /** Names of databases that contain a table called `issues`. */
   databasesWithIssuesTable(): Promise<string[]>;
+  /** Rows in `<database>.issues`. */
+  countIssues(database: string): Promise<number>;
   close(): Promise<void>;
+}
+
+/** A served database as discovery reports it: its name and the size of its `issues` table. */
+export interface DiscoveredDatabase {
+  name: string;
+  /** `SELECT COUNT(*) FROM <db>.issues` at discovery time (startup). */
+  issueCount: number;
 }
 
 export interface DoltConnection {
@@ -65,6 +80,18 @@ export function createDoltProbe(conn: DoltConnection, timeoutSeconds = 5): DoltP
       `) as { db: string }[];
       return [...new Set(rows.map((r) => r.db))];
     },
+    async countIssues(database) {
+      // The name is interpolated as an identifier: refuse anything outside the validated alphabet.
+      if (!DATABASE_NAME_RE.test(database)) {
+        throw new DiscoveryError(
+          `refusing to count issues of database ${JSON.stringify(database)}: invalid name`,
+        );
+      }
+      const rows = (await sql.unsafe(`SELECT COUNT(*) AS n FROM \`${database}\`.issues`)) as {
+        n: number | bigint | string;
+      }[];
+      return Number(rows[0]?.n ?? 0);
+    },
     async close() {
       await sql.close();
     },
@@ -75,6 +102,45 @@ export function createDoltProbe(conn: DoltConnection, timeoutSeconds = 5): DoltP
 export function orderDatabases(names: readonly string[]): string[] {
   const rest = names.filter((n) => n !== GLOBAL_DATABASE);
   return names.includes(GLOBAL_DATABASE) ? [...rest, GLOBAL_DATABASE] : rest;
+}
+
+/**
+ * Largest `issues` table first (ties keep the given order), `beads_global` last regardless of
+ * its size. Pure; orders the auto-discovered list and picks the default database.
+ */
+export function rankDatabases(databases: readonly DiscoveredDatabase[]): DiscoveredDatabase[] {
+  const rest = databases.filter((d) => d.name !== GLOBAL_DATABASE);
+  const global = databases.filter((d) => d.name === GLOBAL_DATABASE);
+  // Array.prototype.sort is stable: equal counts keep their order.
+  const ranked = [...rest].sort((a, b) => b.issueCount - a.issueCount);
+  return [...ranked, ...global];
+}
+
+/**
+ * `BDDB_DEFAULT_DATABASE` when set (it must be served), else the largest database — the first
+ * of `rankDatabases`, so `beads_global` is the default only when it is the only database.
+ */
+export function pickDefaultDatabase(
+  databases: readonly DiscoveredDatabase[],
+  configured: string | null,
+): string {
+  if (configured !== null) {
+    if (!databases.some((d) => d.name === configured)) {
+      throw new DiscoveryError(
+        `BDDB_DEFAULT_DATABASE ${JSON.stringify(configured)} is not among the served databases`,
+        [`databases: ${databases.map((d) => d.name).join(", ")}`],
+      );
+    }
+    return configured;
+  }
+  const first = rankDatabases(databases)[0];
+  if (!first) throw new DiscoveryError("no database to serve");
+  return first.name;
+}
+
+/** `shared (312), siam (75), beads_global (3)` — the startup log line and `bddb doctor`. */
+export function describeDatabases(databases: readonly DiscoveredDatabase[]): string {
+  return databases.map((d) => `${d.name} (${d.issueCount})`).join(", ");
 }
 
 /**
@@ -126,8 +192,18 @@ export interface DiscoverOptions {
   connection: DoltConnection;
 }
 
-/** Connect, select, close. Connection errors become `DiscoveryError` with hints. */
-export async function discoverDatabases(options: DiscoverOptions): Promise<string[]> {
+const CONNECTION_HINTS = [
+  "is `dolt sql-server` running and reachable from here? (try `bddb doctor`)",
+  "from a container the host's dolt must listen on 0.0.0.0 (`listener.host` in dolt-server-config.yaml) or use `--network host`",
+  "check BDDB_DOLT_USER / BDDB_DOLT_PASSWORD",
+];
+
+/**
+ * Connect, select, count, close. Connection errors become `DiscoveryError` with hints. The
+ * result is ordered largest first (`beads_global` last) for auto-discovery, and in the
+ * operator's order for `BDDB_DATABASES`.
+ */
+export async function discoverDatabases(options: DiscoverOptions): Promise<DiscoveredDatabase[]> {
   const probe = options.probe ?? createDoltProbe(options.connection);
   const where = `${options.connection.host}:${options.connection.port}`;
   try {
@@ -140,14 +216,24 @@ export async function discoverDatabases(options: DiscoverOptions): Promise<strin
       const message = err instanceof Error ? err.message : String(err);
       throw new DiscoveryError(
         `cannot query dolt at ${where} as ${options.connection.user}: ${message}`,
-        [
-          "is `dolt sql-server` running and reachable from here? (try `bddb doctor`)",
-          "from a container the host's dolt must listen on 0.0.0.0 (`listener.host` in dolt-server-config.yaml) or use `--network host`",
-          "check BDDB_DOLT_USER / BDDB_DOLT_PASSWORD",
-        ],
+        CONNECTION_HINTS,
       );
     }
-    return selectDatabases(all, withIssues, options.requested);
+    const names = selectDatabases(all, withIssues, options.requested);
+    const counted: DiscoveredDatabase[] = [];
+    for (const name of names) {
+      try {
+        counted.push({ name, issueCount: await probe.countIssues(name) });
+      } catch (err) {
+        if (err instanceof DiscoveryError) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new DiscoveryError(
+          `cannot count issues of database ${name} on dolt at ${where}: ${message}`,
+          CONNECTION_HINTS,
+        );
+      }
+    }
+    return options.requested !== null ? counted : rankDatabases(counted);
   } finally {
     await probe.close().catch(() => {});
   }

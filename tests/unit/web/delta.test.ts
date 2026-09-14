@@ -34,6 +34,7 @@ const snapshot: Snapshot = {
     projectId: null,
     versionWarning: null,
     capabilities: [],
+    issueCount: 0,
   },
   statuses: [{ name: "open", category: "active", builtin: true }],
   types: ["task"],

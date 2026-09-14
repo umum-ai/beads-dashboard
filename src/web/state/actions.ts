@@ -117,7 +117,11 @@ async function closeOne(
 ): Promise<boolean> {
   const done =
     targetStatus ?? board.value.statuses.find((s) => s.category === "done")?.name ?? "closed";
-  const revert = applyOptimistic(row.id, { status: done, ...guessFrom(then ?? {}) });
+  const revert = applyOptimistic(row.id, {
+    status: done,
+    closed_at: new Date().toISOString(),
+    ...guessFrom(then ?? {}),
+  });
   markPending([row.id], true);
   try {
     const body: { actor: string; reason?: string; force?: boolean } = { actor: actor.value };
@@ -158,7 +162,11 @@ async function closeOne(
 
 /** `POST :reopen`, then `PATCH` the target status / priority / parent when given. */
 export async function reopenRow(db: string, id: string, then: IssuePatch | null): Promise<boolean> {
-  const revert = applyOptimistic(id, { status: then?.status ?? "open", ...guessFrom(then ?? {}) });
+  const revert = applyOptimistic(id, {
+    status: then?.status ?? "open",
+    closed_at: null,
+    ...guessFrom(then ?? {}),
+  });
   markPending([id], true);
   try {
     const res = await api.reopenIssue(db, id, { actor: actor.value });

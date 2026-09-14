@@ -42,6 +42,19 @@ export function t(key: string, params?: Params): string {
   return translate(key, params, dictionaries[language.value], en);
 }
 
+/**
+ * Plural-aware `t`: picks `<key>.<form>` for `count` with `Intl.PluralRules` of the current
+ * language (`one`, `few`, `many`, `other`), falling back to `<key>.other`. `count` is passed as
+ * `{count}`, formatted for the locale (`1.5` → `1,5` in Russian).
+ */
+export function tn(key: string, count: number, params?: Params): string {
+  const form = new Intl.PluralRules(locale.value).select(count);
+  const dict = dictionaries[language.value];
+  const formKey = dict[`${key}.${form}`] !== undefined ? `${key}.${form}` : `${key}.other`;
+  const formatted = new Intl.NumberFormat(locale.value, { maximumFractionDigits: 2 }).format(count);
+  return translate(formKey, { ...params, count: formatted }, dict, en);
+}
+
 /** Translate if a key exists, else return `fallback` (for open vocabularies like statuses). */
 export function tOr(key: string, fallback: string, params?: Params): string {
   const dict = dictionaries[language.value];

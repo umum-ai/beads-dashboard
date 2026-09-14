@@ -43,7 +43,7 @@ import {
 const PORT = Number(process.env.MOCK_PORT ?? process.env.BDDB_PORT ?? 7331);
 const HOST = process.env.MOCK_HOST ?? "127.0.0.1";
 const LIVE_MS = Number(process.env.MOCK_LIVE_MS ?? 4000);
-const CLOSED_DAYS = 7;
+const CLOSED_HOURS = 72;
 const ACTOR_DEFAULT = "bddb";
 const NOW = () => Date.now();
 
@@ -100,6 +100,7 @@ function dbInfo(db: FixtureDb): DatabaseInfo {
     projectId: `${db.prefix}-project`,
     versionWarning: process.env.MOCK_VERSION_WARNING ?? null,
     capabilities: ["events.watch", "issues.query", "dependencies.tree"],
+    issueCount: db.issues.size,
     lastError: null,
   };
 }
@@ -116,7 +117,7 @@ function inScope(db: FixtureDb, r: FixtureIssue): boolean {
   const status = r.status ?? "open";
   if (!isDone(db, status)) return true;
   if (!r.closed_at) return false;
-  return NOW() - Date.parse(r.closed_at) <= CLOSED_DAYS * 24 * 3600 * 1000;
+  return NOW() - Date.parse(r.closed_at) <= CLOSED_HOURS * 3600 * 1000;
 }
 
 type Counts = ReturnType<typeof childCounts>;
@@ -1089,7 +1090,7 @@ function meta(): Meta {
     bddb: { version: "0.0.0-mock", builtForBeads: "1.3.0-rc.2" },
     defaultDatabase: fixture[0]?.name ?? "",
     actorDefault: ACTOR_DEFAULT,
-    closedDays: CLOSED_DAYS,
+    closedHours: CLOSED_HOURS,
     pollIntervalMs: 15_000,
     databases: fixture.map(dbInfo),
   };

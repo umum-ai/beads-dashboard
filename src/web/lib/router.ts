@@ -5,7 +5,20 @@ export type Route =
   | { kind: "board"; db: string }
   | { kind: "epics"; db: string }
   | { kind: "issue"; db: string; issueId: string }
+  /** The epics view with the detail drawer open (`/p/<db>/epics/issue/<id>`). */
+  | { kind: "epicsIssue"; db: string; issueId: string }
   | { kind: "unknown"; path: string };
+
+/** Route of the detail drawer for `issueId` inside the view `current` is showing. */
+export function detailRouteIn(current: Route, db: string, issueId: string): Route {
+  const inEpics = current.kind === "epics" || current.kind === "epicsIssue";
+  return { kind: inEpics ? "epicsIssue" : "issue", db, issueId };
+}
+
+/** Where the drawer's close goes: the view it is open in, without the issue. */
+export function closeRouteOf(current: Route, db: string): Route {
+  return { kind: current.kind === "epicsIssue" ? "epics" : "board", db };
+}
 
 /** `decodeURIComponent` that leaves a malformed segment (`%E0%A4%A`) as it is instead of throwing. */
 function decodeSegment(segment: string): string {
@@ -25,6 +38,9 @@ export function parseRoute(pathname: string): Route {
   const view = parts[2];
   if (view === "board" && parts.length === 3) return { kind: "board", db };
   if (view === "epics" && parts.length === 3) return { kind: "epics", db };
+  if (view === "epics" && parts.length === 5 && parts[3] === "issue") {
+    return { kind: "epicsIssue", db, issueId: parts[4] as string };
+  }
   if (view === "issue" && parts.length === 4) {
     return { kind: "issue", db, issueId: parts[3] as string };
   }
@@ -41,6 +57,8 @@ export function routePath(route: Route): string {
       return `/p/${encodeURIComponent(route.db)}/epics`;
     case "issue":
       return `/p/${encodeURIComponent(route.db)}/issue/${encodeURIComponent(route.issueId)}`;
+    case "epicsIssue":
+      return `/p/${encodeURIComponent(route.db)}/epics/issue/${encodeURIComponent(route.issueId)}`;
     case "unknown":
       return route.path;
   }

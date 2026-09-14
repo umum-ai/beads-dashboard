@@ -46,6 +46,8 @@ export interface DatabaseRuntimeOptions {
   wsDir: string;
   config: Config;
   log: Logger;
+  /** `DatabaseInfo.issueCount`: rows in `issues` as discovery counted them (default 0). */
+  issueCount?: number;
   /** Debounce for the ready/stats/counts refresh after journal records (default 300 ms). */
   flushDelayMs?: number;
   /** Overrides for tests. */
@@ -143,6 +145,7 @@ export class DatabaseRuntime {
       projectId: null,
       versionWarning: null,
       capabilities: [],
+      issueCount: options.issueCount ?? 0,
       lastError: null,
     };
     this.supervisor = new BdServeSupervisor({
@@ -315,7 +318,7 @@ export class DatabaseRuntime {
     const started = Date.now();
     try {
       const next = await fetchBaseline(client, {
-        closedDays: this.options.config.closedDays,
+        closedHours: this.options.config.closedHours,
         log: this.log,
       });
       if (this.stopped || this.client !== client) return;
@@ -547,6 +550,6 @@ export class DatabaseRuntime {
   }
 
   private closedSinceNow(): Date {
-    return closedSince(this.options.config.closedDays);
+    return closedSince(this.options.config.closedHours);
   }
 }

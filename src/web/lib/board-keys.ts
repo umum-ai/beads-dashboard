@@ -33,6 +33,17 @@ export function navigateCards(id: string, key: string): boolean {
   return true;
 }
 
+/** Epics view counterpart of `focusCard`: the title link of the row for `id`. */
+export function focusEpicRow(id: string): boolean {
+  const el = document.querySelector<HTMLElement>(
+    `[data-testid="epic-row"][data-id=${CSS.escape(id)}] [data-testid="epic-title"], ` +
+      `[data-testid="epic-child"][data-id=${CSS.escape(id)}] [data-testid="epic-title"]`,
+  );
+  if (!el) return false;
+  el.focus({ preventScroll: true });
+  return true;
+}
+
 /** Give focus back to a card (after the drawer or a menu closes); false when it is gone. */
 export function focusCard(id: string): boolean {
   const el = cardElement(id);

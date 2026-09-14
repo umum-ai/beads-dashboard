@@ -1,7 +1,8 @@
 /**
  * Epics view: every epic of the snapshot as a row (id, title, status, priority, assignee,
  * progress), expandable to its direct children with nested expansion for sub-epics, a link into
- * the board drill-down and the detail drawer on the title. Quick filters from the toolbar apply
+ * the board drill-down and the detail drawer on the title — the drawer opens inside this view
+ * (`/p/<db>/epics/issue/<id>`, the Epics tab stays current). Quick filters from the toolbar apply
  * to the epic rows; status chips narrow the list further.
  */
 import type { JSX } from "preact";
@@ -42,7 +43,7 @@ function IssueRow(props: RowProps): JSX.Element {
   const { db, row, index, done, depth, expanded, onToggle } = props;
   const kids = childrenOf(index, row.id);
   const open = expanded.has(row.id);
-  const detail = { kind: "issue" as const, db, issueId: row.id };
+  const detail = { kind: "epicsIssue" as const, db, issueId: row.id };
   const epic = isEpic(row);
   const priority = clampPriority(row.priority);
   const progress = kids.length || epic ? progressOf(row, index, done) : null;

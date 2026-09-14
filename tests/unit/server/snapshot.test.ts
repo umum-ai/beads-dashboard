@@ -121,8 +121,9 @@ describe("scope and blocked", () => {
   });
   test("closedSince and the query timestamp", () => {
     const now = new Date("2026-09-14T12:00:00.123Z");
-    expect(closedSince(7, now).toISOString()).toBe("2026-09-07T12:00:00.123Z");
-    expect(queryTimestamp(closedSince(7, now))).toBe("2026-09-07T12:00:00Z");
+    expect(closedSince(72, now).toISOString()).toBe("2026-09-11T12:00:00.123Z");
+    expect(closedSince(1, now).toISOString()).toBe("2026-09-14T11:00:00.123Z");
+    expect(queryTimestamp(closedSince(72, now))).toBe("2026-09-11T12:00:00Z");
   });
 });
 

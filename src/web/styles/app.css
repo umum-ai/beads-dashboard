@@ -331,6 +331,103 @@ a:hover {
   margin: 0;
 }
 
+/* --------------------------------------------------------- board settings */
+
+.settings {
+  width: 300px;
+  max-width: calc(100vw - 2 * var(--s-4));
+}
+
+.settings__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 0 var(--s-1) var(--s-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings__title {
+  margin: 0;
+  color: var(--ink);
+}
+
+.settings__db {
+  color: var(--ink-3);
+  font-size: var(--fs-0);
+  max-width: 50%;
+}
+
+.settings__group {
+  padding: var(--s-3) var(--s-1) var(--s-1);
+}
+
+.settings__group + .settings__group {
+  border-top: 1px solid var(--line);
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.settings__h {
+  margin: 0;
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.settings__count {
+  color: var(--ink-3);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings__list {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+}
+
+.settings__check {
+  height: 28px;
+}
+
+.settings__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--cat-color, var(--ink-3));
+}
+
+.settings__help {
+  margin: var(--s-2) 0 0;
+}
+
+.settings__reset {
+  margin-top: var(--s-1);
+  padding-left: var(--s-1);
+  padding-right: var(--s-1);
+}
+
+.settings__reset:disabled {
+  color: var(--ink-3);
+  opacity: 0.6;
+}
+
+.settings__select {
+  cursor: default;
+}
+
+.settings__select .select {
+  flex: none;
+  min-width: 120px;
+}
+
 /* ------------------------------------------------------------------ header */
 
 .header {
@@ -655,6 +752,15 @@ a:hover {
   margin-left: auto;
   color: var(--ink-3);
   font-size: var(--fs-0);
+  white-space: nowrap;
+}
+
+/* "Closed · 24 h": the window sits inside the heading, quieter than the name */
+.column__window {
+  color: var(--ink-3);
+  font-weight: 400;
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 

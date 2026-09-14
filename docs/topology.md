@@ -6,7 +6,8 @@ browser (Preact SPA)
    ▼
 bddb — one process, one port (BDDB_HOST:BDDB_PORT, under BDDB_BASE_PATH)
    ├─ SPA static assets
-   ├─ discovery at start: Bun.SQL → dolt, SHOW DATABASES (the only direct SQL bddb ever runs)
+   ├─ discovery at start: Bun.SQL → dolt, SHOW DATABASES + SELECT COUNT(*) FROM <db>.issues (the only
+   │    direct SQL bddb ever runs; the counts order the list and pick the default database)
    ├─ per database
    │    ├─ synthesized workspace  <work-dir>/<db>/.beads  (dolt_mode: server, events-journal: true)
    │    ├─ supervisor: bd serve --addr 127.0.0.1:<free port>, restart with backoff

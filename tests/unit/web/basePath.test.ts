@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeBasePath, resolveBasePath, stripBase } from "../../../src/web/lib/basePath.ts";
-import { parseRoute, routePath } from "../../../src/web/lib/router.ts";
+import { closeRouteOf, detailRouteIn, parseRoute, routePath } from "../../../src/web/lib/router.ts";
 
 describe("base path discovery", () => {
   test("nothing configured gives the root mount", () => {
@@ -51,12 +51,44 @@ describe("routes", () => {
       db: "db",
       issueId: "kb-1.2",
     });
+    expect(parseRoute("/p/db/epics/issue/kb-1.2")).toEqual({
+      kind: "epicsIssue",
+      db: "db",
+      issueId: "kb-1.2",
+    });
+    expect(routePath({ kind: "epicsIssue", db: "my db", issueId: "kb-1" })).toBe(
+      "/p/my%20db/epics/issue/kb-1",
+    );
     expect(parseRoute("/nope").kind).toBe("unknown");
     expect(parseRoute("/p/db/issue").kind).toBe("unknown");
+    expect(parseRoute("/p/db/epics/issue").kind).toBe("unknown");
+    expect(parseRoute("/p/db/epics/x/kb-1").kind).toBe("unknown");
     expect(routePath({ kind: "issue", db: "my db", issueId: "kb-1" })).toBe(
       "/p/my%20db/issue/kb-1",
     );
     expect(parseRoute("/p/my%20db/board")).toEqual({ kind: "board", db: "my db" });
+  });
+  test("the drawer stays in its view: board links open /issue, epics links /epics/issue", () => {
+    const board = { kind: "board" as const, db: "db" };
+    const epics = { kind: "epics" as const, db: "db" };
+    expect(detailRouteIn(board, "db", "kb-1")).toEqual({
+      kind: "issue",
+      db: "db",
+      issueId: "kb-1",
+    });
+    expect(detailRouteIn({ kind: "issue", db: "db", issueId: "kb-2" }, "db", "kb-1").kind).toBe(
+      "issue",
+    );
+    expect(detailRouteIn(epics, "db", "kb-1")).toEqual({
+      kind: "epicsIssue",
+      db: "db",
+      issueId: "kb-1",
+    });
+    expect(
+      detailRouteIn({ kind: "epicsIssue", db: "db", issueId: "kb-2" }, "db", "kb-1").kind,
+    ).toBe("epicsIssue");
+    expect(closeRouteOf({ kind: "epicsIssue", db: "db", issueId: "kb-1" }, "db")).toEqual(epics);
+    expect(closeRouteOf({ kind: "issue", db: "db", issueId: "kb-1" }, "db")).toEqual(board);
   });
   test("a malformed percent-encoding does not throw (the segment is kept as typed)", () => {
     expect(() => parseRoute("/p/%E0%A4%A/board")).not.toThrow();

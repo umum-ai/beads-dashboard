@@ -1,7 +1,8 @@
 /**
- * One status column: header with count and a "+" (new issue in this status), priority sections
- * (collapsible, persisted), optional "show all closed" footer for done-category statuses, and a
- * drag handle on the right edge that resizes the column (persisted per status name).
+ * One status column: header with count and a "+" (new issue in this status) — done-category
+ * columns also name their closed window ("Closed · 24 h") — priority sections (collapsible,
+ * persisted), and a drag handle on the right edge that resizes the column (persisted per status
+ * name). Which columns exist is decided by the board settings (`lib/columns.ts`).
  *
  * Drag-and-drop: every section body is a drop zone (`data-drop-status` / `data-drop-priority`);
  * while a card is dragged, the sections that are empty appear too, so any priority can be
@@ -9,9 +10,10 @@
  */
 import type { JSX } from "preact";
 import { useRef, useState } from "preact/hooks";
-import { t, tOr } from "../i18n/index.ts";
+import { t, tn, tOr } from "../i18n/index.ts";
 import type { BoardIssue, StatusDef } from "../lib/bff-types.ts";
 import { PRIORITIES, type Priority, type PrioritySection, sectionize } from "../lib/board.ts";
+import { describeHours } from "../lib/columns.ts";
 import { useDropZone } from "../lib/dnd.ts";
 import type { DropLane } from "../lib/dnd-intent.ts";
 import { openCreate } from "../state/create.ts";
@@ -29,6 +31,12 @@ import { Card } from "./Card.tsx";
 
 export function statusLabel(name: string): string {
   return tOr(`status.${name}`, name.replace(/_/g, " "));
+}
+
+/** "12 hours", "1 day", "1.5 days" — plural-aware in both languages. */
+export function closedPeriodLabel(hours: number): string {
+  const { unit, value } = describeHours(hours);
+  return tn(unit === "hour" ? "settings.hours" : "settings.days", value);
 }
 
 interface SectionProps {
@@ -115,11 +123,8 @@ export interface ColumnProps {
   db: string;
   status: StatusDef;
   cards: BoardIssue[];
-  /** Done-category columns: the closed window hint and the "show all" footer. */
-  closedDays?: number | undefined;
-  showAll?:
-    | { loaded: boolean; loading: boolean; total: number | null; onLoad: () => void }
-    | undefined;
+  /** Done-category columns: the closed window (hours) shown next to the name. */
+  closedHours?: number | undefined;
   /**
    * Swimlane mode: the column becomes a subgrid of the board and renders one cell per lane in
    * the lane's grid row (`Swimlane.tsx` places the lane headers between them). `cards` must
@@ -229,15 +234,20 @@ export function Column(props: ColumnProps): JSX.Element {
       <header class="column__head" style={lanes ? { gridRow: 1 } : undefined}>
         <h2 class="column__name ellipsis" title={status.name}>
           {statusLabel(status.name)}
+          {done && props.closedHours !== undefined ? (
+            <span
+              class="column__window"
+              title={t("board.closedWindow.help", { period: closedPeriodLabel(props.closedHours) })}
+              data-testid="column-window"
+            >
+              {" "}
+              {t("board.closedWindow", { hours: props.closedHours })}
+            </span>
+          ) : null}
         </h2>
         <span class="column__count" data-testid="column-count">
           {t("board.column.count", { count: cards.length })}
         </span>
-        {done && props.closedDays !== undefined && !props.showAll?.loaded ? (
-          <span class="column__hint" title={t("board.closedWindow", { days: props.closedDays })}>
-            {t("board.closedWindow", { days: props.closedDays })}
-          </span>
-        ) : null}
         <button
           type="button"
           class="icon-btn column__add"
@@ -278,28 +288,6 @@ export function Column(props: ColumnProps): JSX.Element {
           )}
         </div>
       )}
-      {done && props.showAll ? (
-        <footer
-          class="column__foot"
-          style={lanes ? { gridRow: laneHeaderRow(lanes.length) } : undefined}
-        >
-          {props.showAll.loaded ? (
-            <span class="column__hint" style="margin-left: 0">
-              {t("board.showAllClosed.loaded", { count: cards.length })}
-            </span>
-          ) : (
-            <button
-              type="button"
-              class="btn btn--ghost"
-              disabled={props.showAll.loading}
-              data-testid="show-all-closed"
-              onClick={props.showAll.onLoad}
-            >
-              {props.showAll.loading ? t("board.showAllClosed.loading") : t("board.showAllClosed")}
-            </button>
-          )}
-        </footer>
-      ) : null}
       <hr
         class="column__resize"
         aria-orientation="vertical"

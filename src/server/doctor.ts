@@ -2,8 +2,9 @@
  * `bddb doctor`: is this machine able to run the dashboard against the configured dolt?
  *
  * Checks, in order: `bd` binary and version (minor must match the build), `git` binary
- * (bd serve needs it), dolt TCP reachability, `SHOW DATABASES` + discovery, a temporary
- * `bd serve` for the first database (`/context`), and the events journal on it
+ * (bd serve needs it), dolt TCP reachability, `SHOW DATABASES` + discovery (each database with
+ * its `issues` row count) and the default database, a temporary `bd serve` for the default
+ * database (`/context`), and the events journal on it
  * (`events?since=0` must not be `409 events_journal_disabled`). Critical failures make the
  * exit code non-zero. Everything it starts is stopped again; the temporary workspace is removed.
  */
@@ -12,7 +13,15 @@ import os from "node:os";
 import path from "node:path";
 import { BdClient, checkVersion } from "../api-client/index.ts";
 import type { Config } from "./config.ts";
-import { DiscoveryError, discoverDatabases, doltConnection, tcpReachable } from "./discovery.ts";
+import {
+  type DiscoveredDatabase,
+  DiscoveryError,
+  describeDatabases,
+  discoverDatabases,
+  doltConnection,
+  pickDefaultDatabase,
+  tcpReachable,
+} from "./discovery.ts";
 import { probeHead } from "./live.ts";
 import { silentLogger } from "./log.ts";
 import { bdVersion, spawnBdServeOnce } from "./supervisor.ts";
@@ -134,22 +143,35 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     ]);
   }
 
-  // 4. databases
-  let databases: string[] = [];
+  // 4. databases (with the size of each `issues` table) and the default one
+  let databases: DiscoveredDatabase[] = [];
+  let defaultDatabase: string | null = null;
   if (reachable) {
     try {
       databases = await discoverDatabases({ connection: dolt, requested: config.databases });
-      ok("databases", databases.join(", "));
+      ok("databases", describeDatabases(databases));
     } catch (err) {
       const hints = err instanceof DiscoveryError ? err.hints : [];
       fail("databases", err instanceof Error ? err.message : String(err), hints);
+    }
+    if (databases.length > 0) {
+      try {
+        defaultDatabase = pickDefaultDatabase(databases, config.defaultDatabase);
+        ok(
+          "default database",
+          `${defaultDatabase}${config.defaultDatabase === null ? " (largest; set BDDB_DEFAULT_DATABASE to override)" : ""}`,
+        );
+      } catch (err) {
+        const hints = err instanceof DiscoveryError ? err.hints : [];
+        fail("default database", err instanceof Error ? err.message : String(err), hints);
+      }
     }
   } else {
     fail("databases", "skipped (dolt unreachable)");
   }
 
-  // 5. bd serve + 6. events journal, on the first database
-  const first = databases[0];
+  // 5. bd serve + 6. events journal, on the default database (else the first)
+  const first = defaultDatabase ?? databases[0]?.name;
   if (bd && git && first) {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "bddb-doctor-"));
     try {

@@ -56,6 +56,7 @@ function info(name: string, state: DatabaseInfo["state"]): DatabaseInfo {
     bdVersion: "1.3.0-rc.2",
     projectId: "pid-1",
     versionWarning: null,
+    issueCount: 42,
     capabilities: [],
   };
 }
@@ -93,7 +94,7 @@ const statics: StaticAssets = {
 
 function handlerFor(basePath: string) {
   return createHandler({
-    config: { basePath, actor: "bddb", closedDays: 7, pollIntervalMs: 15_000 },
+    config: { basePath, actor: "bddb", closedHours: 72, pollIntervalMs: 15_000 },
     log: silentLogger,
     runtimes: new Map([
       ["kb", runtime("kb", "ready")],
@@ -132,7 +133,7 @@ describe("process endpoints", () => {
   });
   test("readyz is 503 when nothing is ready", async () => {
     const h = createHandler({
-      config: { basePath: "", actor: "bddb", closedDays: 7, pollIntervalMs: 15_000 },
+      config: { basePath: "", actor: "bddb", closedHours: 72, pollIntervalMs: 15_000 },
       log: silentLogger,
       runtimes: new Map([["cold", runtime("cold", "down")]]),
       defaultDatabase: "cold",

@@ -1,4 +1,4 @@
-/** UI preferences persisted in localStorage (`bddb.*`): theme, actor, column widths, sections, lanes. */
+/** UI preferences persisted in localStorage (`bddb.*`): theme, actor, column widths, sections, lanes, per-database board settings. */
 import { effect, signal } from "@preact/signals";
 import { readSession, readStored, writeSession, writeStored } from "../lib/storage.ts";
 
@@ -103,4 +103,34 @@ export function toggleLane(key: string): void {
 
 export function isLaneCollapsed(key: string): boolean {
   return collapsedLanes.value[key] === true;
+}
+
+/**
+ * Board settings per database (the gear in the header): the visible status columns and the
+ * closed window in hours. `undefined` for a database = never touched (defaults apply).
+ */
+export const visibleColumnsPref = signal<Record<string, string[]>>(readStored("columns", {}));
+export const closedHoursPref = signal<Record<string, number>>(readStored("closedHours", {}));
+
+/** Stored column list for `db`, or `null` for the defaults (`lib/columns.ts`). */
+export function storedColumns(db: string): string[] | null {
+  return visibleColumnsPref.value[db] ?? null;
+}
+
+export function setVisibleColumns(db: string, next: string[] | null): void {
+  const all = { ...visibleColumnsPref.value };
+  if (next === null) delete all[db];
+  else all[db] = next;
+  visibleColumnsPref.value = all;
+  writeStored("columns", all);
+}
+
+export function storedClosedHours(db: string): number | null {
+  return closedHoursPref.value[db] ?? null;
+}
+
+export function setClosedHours(db: string, hours: number): void {
+  const all = { ...closedHoursPref.value, [db]: hours };
+  closedHoursPref.value = all;
+  writeStored("closedHours", all);
 }

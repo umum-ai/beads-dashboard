@@ -13,9 +13,9 @@ import { t } from "../i18n/index.ts";
 import { ApiError, api } from "../lib/api.ts";
 import type { BoardIssue, IssueDetails } from "../lib/bff-types.ts";
 import { clampPriority, compareCards } from "../lib/board.ts";
-import { focusCard } from "../lib/board-keys.ts";
+import { focusCard, focusEpicRow } from "../lib/board-keys.ts";
 import { typeGlyph } from "../lib/issue-meta.ts";
-import { navigate } from "../state/route.ts";
+import { closeRoute, navigate, route } from "../state/route.ts";
 import { board, childrenOf } from "../state/snapshot.ts";
 import { describeError } from "../state/toasts.ts";
 import { copyId, typeLabel } from "./Card.tsx";
@@ -111,11 +111,14 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
   const lastStamp = useRef<string | null>(null);
   const pendingReload = useRef(false);
 
-  // Closing gives focus back to the card that opened the drawer (it is the board's keyboard stop).
+  // Closing returns to the view the drawer is open in (board or epics, filters kept) and gives
+  // focus back to the card or epic row that opened it.
+  const inEpics = route.value.kind === "epicsIssue";
   const close = () => {
-    navigate({ kind: "board", db });
-    setTimeout(() => focusCard(id), 0);
+    navigate(closeRoute(db));
+    setTimeout(() => focusCard(id) || focusEpicRow(id), 0);
   };
+  const backLabel = inEpics ? t("detail.backToEpics") : t("detail.backToBoard");
 
   const load = useCallback(
     (silent = false) => {
@@ -245,10 +248,10 @@ export function DetailPanel({ db, id }: { db: string; id: string }): JSX.Element
               body={notFound ? t("detail.notFound.body") : describeError(error)}
               action={
                 notFound
-                  ? { label: t("detail.backToBoard"), onClick: close, testId: "detail-back" }
+                  ? { label: backLabel, onClick: close, testId: "detail-back" }
                   : { label: t("state.retry"), onClick: () => load() }
               }
-              secondary={notFound ? undefined : { label: t("detail.backToBoard"), onClick: close }}
+              secondary={notFound ? undefined : { label: backLabel, onClick: close }}
               testId="detail-error"
             />
           ) : null}

@@ -1,13 +1,13 @@
 /**
  * Keyboard model of the board, kept pure so it is unit-tested without a DOM:
- * - `resolveShortcut` maps a key press on the page to a global action (`/`, `n`, `?`, Escape);
+ * - `resolveShortcut` maps a key press on the page to a global action (`/`, `n`, `?`, `,`, Escape);
  * - `moveFocus` decides which card gets focus when an arrow key is pressed on a card, given
  *   the board as a list of columns (each a list of card ids in visual order).
  *
  * The DOM glue (`lib/board-keys.ts`, `Card.tsx`) only collects the ids and applies the result.
  */
 
-export type ShortcutAction = "focusSearch" | "newIssue" | "help" | "escape";
+export type ShortcutAction = "focusSearch" | "newIssue" | "help" | "settings" | "escape";
 
 /** DOM id of the toolbar's quick-filter input (`/` focuses it). */
 export const QUICK_FILTER_ID = "quick-filter";
@@ -41,6 +41,8 @@ export function resolveShortcut(event: KeyLike, inField: boolean): ShortcutActio
       return "focusSearch";
     case "?":
       return "help";
+    case ",":
+      return "settings";
     case "n":
     case "N":
       return event.shiftKey ? null : "newIssue";

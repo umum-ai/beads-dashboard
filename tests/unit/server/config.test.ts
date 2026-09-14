@@ -71,7 +71,7 @@ describe("loadConfig", () => {
     expect(cfg.defaultDatabase).toBeNull();
     expect(cfg.actor).toBe("bddb");
     expect(cfg.pollIntervalMs).toBe(15_000);
-    expect(cfg.closedDays).toBe(7);
+    expect(cfg.closedHours).toBe(72);
     expect(cfg.bdPath).toBe("bd");
     expect(cfg.logLevel).toBe("info");
   });
@@ -87,14 +87,14 @@ describe("loadConfig", () => {
       BDDB_LOG_LEVEL: "debug",
       BDDB_DOLT_PASSWORD: "secret",
     };
-    const cfg = loadConfig({ env, argv: ["--port", "9000", "--closed-days=30"] });
+    const cfg = loadConfig({ env, argv: ["--port", "9000", "--closed-hours=48"] });
     expect(cfg.port).toBe(9000);
     expect(cfg.doltPort).toBe(3399);
     expect(cfg.databases).toEqual(["kb", "shared"]);
     expect(cfg.defaultDatabase).toBe("shared");
     expect(cfg.pollIntervalMs).toBe(3000);
     expect(cfg.basePath).toBe("/beads");
-    expect(cfg.closedDays).toBe(30);
+    expect(cfg.closedHours).toBe(48);
     expect(cfg.logLevel).toBe("debug");
     expect(cfg.doltPassword).toBe("secret");
   });
@@ -102,6 +102,9 @@ describe("loadConfig", () => {
   test("validation errors are ConfigError with a clear message", () => {
     expect(() => loadConfig({ env: { BDDB_PORT: "70000" } })).toThrow(/BDDB_PORT/);
     expect(() => loadConfig({ env: { BDDB_POLL_INTERVAL: "100ms" } })).toThrow(/at least 1s/);
+    expect(() => loadConfig({ env: { BDDB_CLOSED_HOURS: "0" } })).toThrow(/between 1 and 720/);
+    expect(() => loadConfig({ env: { BDDB_CLOSED_HOURS: "721" } })).toThrow(/BDDB_CLOSED_HOURS/);
+    expect(() => loadConfig({ env: NO_ENV, argv: ["--closed-days", "7"] })).toThrow(/unknown flag/);
     expect(() => loadConfig({ env: { BDDB_LOG_LEVEL: "loud" } })).toThrow(/BDDB_LOG_LEVEL/);
     expect(() => loadConfig({ env: { BDDB_DATABASES: " , " } })).toThrow(/lists no database/);
     expect(() =>

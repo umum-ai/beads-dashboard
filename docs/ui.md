@@ -10,10 +10,10 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 |---|---|
 | `index.html`, `main.tsx` | Bun HTML entry; mounts `<App />` into `#app`. |
 | `app.tsx` | Shell: loads `/api/meta`, switches views by route, keeps one live stream per displayed database, renders header, banner, drawer and toasts. |
-| `components/` | `Header` (project switcher, tabs, live indicator, actor, language, theme), `Toolbar` (quick filters, `extra` slot), `QueryBar` (`QueryToggle`, the `bd query` strip), `Column` (flat and swimlane cell modes, drop zones, "+"), `Card` (draggable, selection, `⋯` menu), `Menu` (portal menu), `Swimlane` (`SwimlaneBoard`, `LaneHeader` as drop zone, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel` + `detail/` (`editor.ts`, `Fields`, `TextSections`, `Relations`), `editors/` (`IssuePicker`, `LabelsEditor`, `MarkdownEditor`), `CreateIssueModal`, `Dialog` (`DialogHost`), `EmptyState` (title, body, `detail` block, `hints` list, primary + secondary action, spinner), `Toasts`, `VersionBanner`, `StatusBanners` (`ConnectionBanner`, `DatabaseBanner`), `ShortcutsHelp` (the `?` dialog), `Popover`, `LiveIndicator`. |
+| `components/` | `Header` (project switcher, tabs, live indicator, board settings gear, actor, language, theme), `BoardSettings` (the gear popover: visible columns and the closed period, per database), `Toolbar` (quick filters, `extra` slot), `QueryBar` (`QueryToggle`, the `bd query` strip), `Column` (flat and swimlane cell modes, drop zones, "+"), `Card` (draggable, selection, `⋯` menu), `Menu` (portal menu), `Swimlane` (`SwimlaneBoard`, `LaneHeader` as drop zone, `GroupToggle`, `ProgressBar`), `Breadcrumbs`, `TreeView` (`HierarchySection`, `DependencyTree`), `DetailPanel` + `detail/` (`editor.ts`, `Fields`, `TextSections`, `Relations`), `editors/` (`IssuePicker`, `LabelsEditor`, `MarkdownEditor`), `CreateIssueModal`, `Dialog` (`DialogHost`), `EmptyState` (title, body, `detail` block, `hints` list, primary + secondary action, spinner), `Toasts`, `VersionBanner`, `StatusBanners` (`ConnectionBanner`, `DatabaseBanner`), `ShortcutsHelp` (the `?` dialog), `Popover`, `LiveIndicator`. |
 | `views/` | `BoardView` (columns per status, swimlanes per epic, drill-down), `EpicsView` (epic list with progress and expandable children). |
-| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`, read and write proxies), `mutations` (guarded PATCH, optimistic rows), `dnd-intent` (drop → writes resolver), `dnd` (pragmatic-drag-and-drop hooks), `live` (EventSource, reconnect, server probe), `keyboard` (shortcut resolver, arrow-key card navigation over columns of ids), `board-keys` (DOM glue for it), `focus-trap` (dialog focus trap + return), `contrast` (WCAG arithmetic over `tokens.css`, used by the unit test only), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage` (local + session), `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
-| `state/` | Signals: `meta` (+ `actor`), `route` (+ filters), `snapshot` (board state, connection, extra closed rows, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner), `toasts`, `dialogs` (promise-based modals), `actions` (board writes: move, close, reopen, batch), `selection` (multi-select, drag, pending), `create` (new-issue modal request), `query` (query mode). |
+| `lib/` | Pure, unit-tested logic: `basePath` (mount discovery), `router` (path ⇄ route), `filters` (query string ⇄ filters, matching), `board` (columns, priority sections, card order), `columns` (board settings: default / stored visible columns, closed-window options and filter), `hierarchy` (parent/children index, ancestors, descendants, top epic, lane grouping, progress), `delta` (snapshot state and delta application), `api` (fetch wrapper, `ApiError`, read and write proxies), `mutations` (guarded PATCH, optimistic rows), `dnd-intent` (drop → writes resolver), `dnd` (pragmatic-drag-and-drop hooks), `live` (EventSource, reconnect, server probe), `keyboard` (shortcut resolver, arrow-key card navigation over columns of ids), `board-keys` (DOM glue for it), `focus-trap` (dialog focus trap + return), `contrast` (WCAG arithmetic over `tokens.css`, used by the unit test only), `i18n-core`, `markdown` (marked + DOMPurify), `time`, `storage` (local + session), `clipboard`, `issue-meta` (type glyphs), `bff-types` (wire types of the BFF, reusing `src/api-client/types.ts`). |
+| `state/` | Signals: `meta` (+ `actor`), `route` (+ filters, `detailRoute` / `closeRoute` for the view-aware drawer), `snapshot` (board state, connection, derived child counters), `prefs` (theme, actor, column widths, collapsed sections and lanes, group-by-epic, dismissed banner, per-database visible columns and closed hours), `toasts`, `dialogs` (promise-based modals), `actions` (board writes: move, close, reopen, batch), `selection` (multi-select, drag, pending), `create` (new-issue modal request), `query` (query mode). |
 | `i18n/` | `en.json` (reference), `ru.json` (same keys), `index.ts` (`t`, `tOr`, language signal). |
 | `styles/` | `tokens.css` (design tokens, light and dark), `app.css` (all component styles). |
 | `dev/` | `mock-bff.ts` and `fixture.ts`: a `Bun.serve` implementation of the BFF API over an in-memory fixture, used for development and e2e. Not part of the product build. |
@@ -21,7 +21,9 @@ the state model, i18n and theming rules, and how to run the mock and the e2e sui
 ## Routing and base path
 
 Routes: `/p/<db>/board`, `/p/<db>/epics`, `/p/<db>/issue/<id>` (board with the detail drawer
-open). `/` redirects (client-side) to the default database's board. Quick filters live in the
+open), `/p/<db>/epics/issue/<id>` (epics view with the drawer open; the Epics tab stays current).
+`/` redirects (client-side) to the default database's board (`meta.defaultDatabase`, chosen by
+the server). Quick filters live in the
 query string (`?q=…&type=a,b&label=…&assignee=…&priority=0,1`) and survive reloads;
 project switches keep the view but drop the filters. `?epic=<id>` on the board is the
 drill-down target (see Hierarchy) and `?query=<expr>` the advanced-search expression (see Query
@@ -48,8 +50,6 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
   equal one is ignored. Deltas that arrive while that refetch is in flight are queued and
   replayed onto the fetched snapshot (`applyQueued`: `seq <= snapshot.seq` dropped, the rest
   chained; a gap among them refetches once more).
-- `extraClosed`: rows loaded by "Show all closed" (`GET issues?status=<done>&all=true&limit=0&brief=true`,
-  paged by `next_cursor`). Merged into `allIssues` behind the snapshot rows.
 - `childStats`: derived `Map<parentId, {total, closed}>` from `parent` links, used for epic
   progress on cards when the row does not carry `epic_*` counters.
 - `connection`: EventSource state — `idle`, `connecting`, `open`, `closed` (the server refused
@@ -65,19 +65,36 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
 - `prefs` persist in `localStorage` under `bddb.`: `theme`, `lang`, `actor`, `columnWidths`
   (per status name), `collapsed` (per `status:priority`, or `status@<lane>:priority` inside a
   swimlane), `groupByEpic` (default `true`), `collapsedLanes` (per epic id, `""` = no-epic
-  lane). `dismissedVersionWarning` lives in **sessionStorage** (the banner comes back on the
-  next visit). Every access is guarded; missing storage only means no persistence.
+  lane), `columns` (per database: the visible status names; absent = defaults) and
+  `closedHours` (per database: the Closed column's period). `dismissedVersionWarning` lives in
+  **sessionStorage** (the banner comes back on the next visit). Every access is guarded; missing
+  storage only means no persistence.
 
 ## Board rules
 
-- Columns = `snapshot.statuses` in order (active → wip → frozen → done, custom statuses
-  included). A row with a status the snapshot does not list gets an extra column at the end.
+- Columns = the statuses of `snapshot.statuses` (active → wip → frozen → done, custom statuses
+  included) that the board settings mark visible, in that order. Default: `open`,
+  `in_progress`, `blocked`, `closed`; every other status — `hooked`, `deferred`, `pinned`, a
+  custom one, or a status new to the workspace — stays hidden until checked in the gear (⚙ in
+  the header, or `,`). Hidden statuses' issues are not on the board (they stay reachable from
+  the epics view, the drawer and the card menu, whose "Move to …" lists every status); drop
+  targets are the visible columns. The choice persists per database (`prefs.columns`); "Reset
+  to defaults" forgets it. With every column unchecked the board shows `No columns shown`
+  [`board-no-columns`] with a "Choose columns" action. Query mode ignores the setting and shows
+  every status the result contains.
 - Inside a column: sections P0…P4 (collapsible, empty ones hidden), cards newest first by
   `created_at`, ties by id. Section bodies carry `data-drop-status` / `data-drop-priority`
   so stage 5 can attach pragmatic-drag-and-drop targets without restructuring.
 - "Blocked" badge = the BFF's `blocked` flag (open-ish status and not in `ready`).
-- Done column shows the BFF's closed window (`meta.closedDays`); "Show all closed" loads the
-  rest once per database visit.
+- The Closed column (any done-category status) shows only rows whose `closed_at` lies within
+  the chosen period — the gear's "Show closed from the last …" select: 1–12 h hourly, then 15,
+  18, 21, 24, 36, 48, 60, 72 h (labelled "12 hours", "1 day", "1.5 days" …; default 24 h, per
+  database in `prefs.closedHours`). The server keeps `meta.closedHours` (`BDDB_CLOSED_HOURS`,
+  default 72) in the snapshot, so longer options are disabled with the hint "The server keeps
+  N h"; a stored value above it is capped. A done row without `closed_at` is never shown. The
+  column header names the window ("Closed · 24 h"); the window rolls with the 15 s `now` tick.
+  Closing a card optimistically stamps `closed_at` so it lands in the column before the server's
+  row arrives; reopening clears it.
 - Columns are resizable by dragging the right edge (pointer events) or with the keyboard on
   the focused handle (arrows, Shift+arrows, Home). Widths are clamped to 200–640 px.
 - Around 1000 cards render in well under a second; columns use `contain: layout style`,
@@ -85,9 +102,13 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
 
 ## Detail drawer
 
-Opened by clicking a card or pressing Enter on it (URL `/p/<db>/issue/<id>`), closed by
-Escape, the backdrop or the close button (URL returns to the board and focus returns to the
-card). It is `role="dialog" aria-modal="false"` labelled by the title (`h2`; sections are `h3`,
+Opened by clicking a card or pressing Enter on it (URL `/p/<db>/issue/<id>`), or by clicking a
+title in the epics view (URL `/p/<db>/epics/issue/<id>`, the epics list stays underneath and the
+Epics tab current); closed by Escape, the backdrop or the close button (URL returns to the view it
+opened in — `/board` or `/epics` — with the filters kept, and focus returns to the card or the
+epic row's title). Links inside the drawer (parent crumbs, children, dependencies, the parent
+↗, a freshly created issue) stay in the current view (`state/route.ts` `detailRoute`); the
+"Focus" / "Open board" buttons intentionally go to the board drill-down. It is `role="dialog" aria-modal="false"` labelled by the title (`h2`; sections are `h3`,
 tree parts `h4`). Loads
 `GET /api/p/<db>/issues/<id>?include_comments=true&include_dependents=true` and re-reads
 silently when a delta changes the row's `updated_at`, `status` or `comment_count`. Markdown
@@ -138,7 +159,8 @@ drill-down; an unknown id shows a "not in the snapshot" crumb with an empty boar
 Epics view (`/p/<db>/epics`, `views/EpicsView.tsx`): every epic of the snapshot (sub-epics
 included) sorted by priority then `created_at`, filtered by the toolbar's quick filters and by
 status chips (one per status some epic has, plus All). A row shows glyph, id, title (opens the
-drawer), blocked badge, status, priority, assignee, progress bar and "Open board" (drill-down).
+drawer in place, `/p/<db>/epics/issue/<id>`), blocked badge, status, priority, assignee,
+progress bar and "Open board" (drill-down on the board).
 The caret expands the direct children as nested rows with the same columns; children with
 children (sub-epics, or any parent) expand further. Expansion state is per visit.
 
@@ -166,6 +188,7 @@ Shortcuts (`lib/keyboard.ts` decides, `app.tsx` and `Card.tsx` apply; the `?` di
 | anywhere (no text field focused, no modifier) | `/` | focus the quick filter (`#quick-filter`) |
 | | `n` | New issue (pre-fills the drilled epic as parent); not in the drawer |
 | | `?` | open / close the shortcuts help |
+| | `,` | open / close the board settings (focus lands on the first column checkbox; `Esc` closes and returns focus to the gear) |
 | | `Esc` | close a dialog, menu or the drawer; clear the multi-selection |
 | on a card (`tabindex=0`) | `Tab` / `Shift+Tab` | previous / next card — the id button, menu button and title link inside are `tabindex=-1`, so a board of hundreds of cards stays tabbable |
 | | `↑` `↓` | previous / next card in the column (clamped) |
@@ -180,6 +203,10 @@ Shortcuts (`lib/keyboard.ts` decides, `app.tsx` and `Card.tsx` apply; the `?` di
 
 Rules the components follow:
 
+- Popovers (`Popover`: board settings, actor, type filter) are non-modal `role="dialog"`
+  panels with `aria-label`; opening moves focus to `[data-autofocus]` or the first control,
+  Escape and an outside click close them, and focus returns to the trigger unless the user
+  already focused something else.
 - Every modal (`Dialog` frames, `CreateIssueModal`, `ShortcutsHelp`) is `role="dialog"` /
   `"alertdialog"` + `aria-modal="true"` + `aria-labelledby`, installs `trapFocus`
   (`lib/focus-trap.ts`) in a layout effect: initial focus on `[data-autofocus]`, else the first
@@ -225,12 +252,14 @@ action). `data-testid` in brackets.
 | `down` / `degraded` while the board has data | banner under the header | one line + hints + `lastError` [`db-banner`]; the board keeps its last state |
 | dashboard server unreachable | header | `Disconnected — retrying`, after 5 s with the elapsed seconds; after 10 s a banner with Reload [`connection-banner`]; both clear on reconnect |
 | board with no issues | board | `No issues yet` + "Create the first issue" [`board-empty`] |
+| every column unchecked in the settings | board | `No columns shown` + "Choose columns" (opens the gear) [`board-no-columns`] |
+| issues exist but none in the shown columns / period | board | `Nothing in the shown columns` + "Choose columns" [`board-hidden-all`] |
 | quick filters match nothing | board / epics | `No issue matches the current filters.` + "Clear filters" (keeps drill-down and query) [`filter-empty`] |
 | drill-down with no descendants | board | "Create an issue in this epic" (parent pre-filled) + "All issues" [`drill-empty`] |
 | query mode with no rows | board | `No matches` + "Clear" (drops `?query=`) [`query-empty`]; while running, the spinner |
 | no epics | epics | `No epics yet` + "Create an epic" (type pre-filled) + Board [`epics-empty`] |
 | empty column | board | `Nothing here` (flat board); an empty lane cell is a plain drop area |
-| drawer for an unknown id (`404`) | drawer | `Issue <id> was not found` + "Back to board" [`detail-error`, `detail-back`]; other errors show the detail with Retry and "Back to board" |
+| drawer for an unknown id (`404`) | drawer | `Issue <id> was not found` + "Back to board" (or "Back to epics" under `/epics/issue/<id>`) [`detail-error`, `detail-back`]; other errors show the detail with Retry and the same back action |
 | version mismatch | banner | `bd X does not match … (built for Y)`, the schema-risk explanation, a link to `docs/compatibility.md`, Dismiss (per tab) [`version-banner`] |
 
 Connection handling (`lib/live.ts`): a network failure lets `EventSource` retry by itself and
@@ -244,6 +273,9 @@ board keeps showing its last data in every case; only writes fail.
 ## i18n rules
 
 - Every visible string, `aria-label`, `title` and placeholder goes through `t(key, params)`.
+  Counts with a unit go through `tn(key, count)`, which picks `<key>.one|few|many|other` with
+  `Intl.PluralRules` of the language (both files carry all four forms; English repeats
+  `other`) and formats the number for the locale (`1.5 days` / `1,5 дня`).
 - `en.json` is the reference; `ru.json` must have exactly the same keys with the same
   `{placeholders}` (unit-tested). Missing keys fall back to English, then to the key itself.
 - Open vocabularies (statuses, types, problem codes) use `tOr(key, fallback)` so unknown values
@@ -303,7 +335,7 @@ scripts/stand.sh down
 ```
 
 Two Playwright projects: `chromium` runs `tests/e2e/board.spec.ts` (board, drawer, theme, language,
-filters, resize) and `tests/e2e/epics.spec.ts` (swimlanes, group toggle, drill-down, epics view,
+filters, resize, the board settings: columns, closed period, server cap, `,`) and `tests/e2e/epics.spec.ts` (swimlanes, group toggle, drill-down, epics view,
 drawer hierarchy — the tests named `real:` pick an epic with children from the snapshot, so they
 run against both targets; fixture-only assertions are skipped when `E2E_TARGET` is not `mock`)
 and `tests/e2e/edit.spec.ts` (every write: drag-and-drop, dialogs, drawer editing, creation,
@@ -443,7 +475,9 @@ their detail the same way.
 
 ## Testing the writes
 
-Unit: `tests/unit/web/mutations.test.ts` (guarded PATCH with an in-memory transport: revision
+Unit: `tests/unit/web/columns.test.ts` (default and stored visible columns, the hours options,
+the capped effective period, the closed-window filter — `closed_at` within N hours, missing →
+hidden), `tests/unit/web/mutations.test.ts` (guarded PATCH with an in-memory transport: revision
 read, `expected_version`, conflict result, optimistic apply / revert) and
 `tests/unit/web/dnd-intent.test.ts` (every row of the DnD table, multi-drop grouping).
 
@@ -474,5 +508,7 @@ else → `400 invalid_argument param=q`).
   batch move.
 - Roving `tabindex` (one tab stop per column) instead of one per card; `aria-keyshortcuts` on
   cards; a "skip to board" link.
-- Epic child counters do not see children closed before the `BDDB_CLOSED_DAYS` window; the
-  drill-down toolbar count is the whole board's count.
+- Epic child counters do not see children closed before the `BDDB_CLOSED_HOURS` window; the
+  drill-down toolbar count is the whole board's count. Closed issues older than that window are
+  not reachable from the board (the on-demand "Show all closed" loader was removed with the
+  period select); `?query=` still finds them.

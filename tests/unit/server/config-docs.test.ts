@@ -1,6 +1,6 @@
 /**
  * The configuration reference must match the code one to one: every `BDDB_*` variable that
- * `src/server/config.ts` reads has a row in docs/configuration.md (and in the README table),
+ * `src/server/config.ts` reads has a row in docs/configuration.md (the README table is a subset and may not invent names),
  * and the docs name no variable the code does not read.
  */
 import { describe, expect, test } from "bun:test";
@@ -45,10 +45,7 @@ describe("README configuration table ↔ config.ts", () => {
   const readme = read("README.md");
   const documented = documentedInTable(readme);
 
-  test("lists every variable", () => {
-    expect([...codeVars].filter((v) => !documented.has(v)).sort()).toEqual([]);
-  });
-
+  // The README table is deliberately a "most used" subset; only docs/configuration.md is exhaustive.
   test("names no unknown variable", () => {
     expect([...documented].filter((v) => !codeVars.has(v)).sort()).toEqual([]);
   });

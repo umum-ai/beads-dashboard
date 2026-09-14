@@ -41,6 +41,7 @@ export function shortcutGroups(): Group[] {
         { keys: ["/"], label: t("help.focusSearch") },
         { keys: ["n"], label: t("help.newIssue") },
         { keys: ["?"], label: t("help.showHelp") },
+        { keys: [","], label: t("help.settings") },
         { keys: ["Esc"], label: t("help.escape") },
       ],
     },
