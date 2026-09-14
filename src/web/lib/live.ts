@@ -22,11 +22,13 @@ import {
 } from "../state/snapshot.ts";
 import { ApiError, api } from "./api.ts";
 import type { DatabaseInfo, Delta, Snapshot } from "./bff-types.ts";
-import { applyDelta, fromSnapshot } from "./delta.ts";
+import { applyDelta, applyQueued, fromSnapshot } from "./delta.ts";
 
 let source: EventSource | null = null;
 let activeDb: string | null = null;
 let refetching = false;
+/** Deltas that arrived while `/snapshot` was being refetched; replayed on top of it. */
+let queued: Delta[] = [];
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
@@ -70,13 +72,25 @@ function acceptSnapshot(db: string, snapshot: Snapshot): void {
   updateDatabaseInfo(snapshot.database);
 }
 
+/** Deltas that arrived during the refetch, on top of the fresh snapshot (`applyQueued`). */
+function replayQueued(db: string): void {
+  const pending = queued;
+  queued = [];
+  const { state, gap } = applyQueued(board.value, pending);
+  board.value = state;
+  if (gap) void refetchSnapshot(db);
+}
+
 /** Fetch `/snapshot` over HTTP; used for the first paint and after a sequence gap. */
 export async function refetchSnapshot(db: string): Promise<void> {
   if (refetching) return;
   refetching = true;
+  queued = [];
+  let fetched = false;
   try {
     const snapshot = await api.snapshot(db);
     acceptSnapshot(db, snapshot);
+    fetched = db === activeDb;
   } catch (err) {
     if (db === activeDb) {
       boardError.value = err;
@@ -94,6 +108,8 @@ export async function refetchSnapshot(db: string): Promise<void> {
     }
   } finally {
     refetching = false;
+    if (fetched) replayQueued(db);
+    else queued = [];
   }
 }
 
@@ -156,6 +172,11 @@ function openStream(db: string): void {
     if (db !== activeDb) return;
     const delta = parse<Delta>(event as MessageEvent);
     if (!delta) return;
+    if (refetching) {
+      // The snapshot on its way may or may not include this change: keep it, decide by seq.
+      queued.push(delta);
+      return;
+    }
     const result = applyDelta(board.value, delta);
     if (result.ok) board.value = result.state;
     else if (result.reason === "gap") void refetchSnapshot(db);
@@ -198,6 +219,7 @@ export function disconnectLive(): void {
   source?.close();
   source = null;
   activeDb = null;
+  queued = [];
   connection.value = "idle";
   disconnectedSince.value = null;
 }

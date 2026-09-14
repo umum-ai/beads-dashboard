@@ -193,7 +193,10 @@ export function toBoardIssue(
   return { ...briefRow(row), blocked: isBlocked(row, ready, statuses) };
 }
 
-/** Closed issues stay on the board while `closed_at >= closedSince`. */
+/**
+ * Closed issues stay on the board while `closed_at >= closedSince`; a done-category row
+ * without a `closed_at` has no date to fall inside the window and is out of scope.
+ */
 export function inScope(
   row: IssueWithCounts,
   statuses: readonly StatusDef[],
@@ -201,7 +204,7 @@ export function inScope(
 ): boolean {
   if (isHiddenByDefault(row)) return false;
   if (statusCategory(statuses, row.status) !== "done") return true;
-  if (!row.closed_at) return true;
+  if (!row.closed_at) return false;
   const closed = Date.parse(row.closed_at);
   return Number.isNaN(closed) ? true : closed >= closedSince.getTime();
 }
@@ -424,7 +427,7 @@ export async function fetchClosedWithin(
       reqOpts(signal),
     );
     return page.items.filter(
-      (row) => !row.closed_at || Date.parse(row.closed_at) >= since.getTime(),
+      (row) => row.closed_at !== undefined && Date.parse(row.closed_at) >= since.getTime(),
     );
   }
 }

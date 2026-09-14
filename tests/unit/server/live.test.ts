@@ -123,11 +123,53 @@ describe("runLiveStream", () => {
         rebaselines.push(reason);
       },
     });
-    await until(() => probes >= 3);
+    await until(() => probes >= 4);
     ctrl.abort();
     await done;
-    expect(rebaselines[0]).toBe("journal_disabled");
+    // One re-baseline for the outage; the later probes only look again (the poll timer diffs).
+    expect(rebaselines).toEqual(["journal_disabled"]);
     expect(off[0]).toBe("journal_disabled");
+    expect(off.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("journal comes back: probe ok → rebaseline(start); disabled again → one more", async () => {
+    let phase: "disabled" | "ok" | "disabled_again" = "disabled";
+    let probes = 0;
+    const bd = client((url) => {
+      if (url.pathname.endsWith("/events")) {
+        probes++;
+        if (phase === "ok") return Response.json({ records: [], head: 3 });
+        return problem(409, "events_journal_disabled");
+      }
+      // the stream: short-lived while ok (so the loop reconnects), 409 once disabled again
+      if (phase === "disabled_again") return problem(409, "events_journal_disabled");
+      return sse("retry: 3000\n\n");
+    });
+    const rebaselines: string[] = [];
+    const ctrl = new AbortController();
+    const done = runLiveStream({
+      client: bd,
+      log: silentLogger,
+      signal: ctrl.signal,
+      disabledRetryMs: 10,
+      backoffMinMs: 5,
+      backoffMaxMs: 10,
+      onRecord: () => {},
+      onConnected: () => {},
+      onDisconnected: () => {},
+      onRebaseline: async (reason) => {
+        rebaselines.push(reason);
+      },
+    });
+    await until(() => probes >= 3);
+    phase = "ok";
+    await until(() => rebaselines.includes("start"));
+    phase = "disabled_again";
+    await until(() => rebaselines.filter((r) => r === "journal_disabled").length === 2);
+    await until(() => probes >= 8);
+    ctrl.abort();
+    await done;
+    expect(rebaselines).toEqual(["journal_disabled", "start", "journal_disabled"]);
   });
 
   test("truncated frame → since = head, rebaseline(truncated), reconnect from head", async () => {

@@ -7,8 +7,17 @@ export type Route =
   | { kind: "issue"; db: string; issueId: string }
   | { kind: "unknown"; path: string };
 
+/** `decodeURIComponent` that leaves a malformed segment (`%E0%A4%A`) as it is instead of throwing. */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function parseRoute(pathname: string): Route {
-  const parts = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const parts = pathname.split("/").filter(Boolean).map(decodeSegment);
   if (parts.length === 0) return { kind: "home" };
   if (parts[0] !== "p" || parts.length < 2) return { kind: "unknown", path: pathname };
   const db = parts[1] as string;

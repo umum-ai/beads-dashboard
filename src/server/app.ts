@@ -33,7 +33,10 @@ export interface App {
   stop(): Promise<void>;
 }
 
-const MAX_BODY_BYTES = 1_048_576; // bd serve's own request-body limit
+/** bd serve's own request-body limit; bodies above it are refused before parsing. */
+export const MAX_BODY_BYTES = 1_048_576;
+/** `Bun.serve` hard cap: the limit plus headroom so the 413 problem is ours, not Bun's bare one. */
+const MAX_REQUEST_BODY_SIZE = MAX_BODY_BYTES + 64 * 1024;
 
 export interface CreateAppOptions {
   config: Config;
@@ -62,9 +65,16 @@ export async function createApp(options: CreateAppOptions): Promise<App> {
 
   const root = workspaceRoot(config.workDir);
   const runtimes = new Map<string, DatabaseRuntime>();
-  for (const name of names) {
-    const wsDir = await ensureWorkspace({ root, database: name, log });
-    runtimes.set(name, new DatabaseRuntime({ name, wsDir, config, log }));
+  const releases: (() => Promise<void>)[] = [];
+  try {
+    for (const name of names) {
+      const ws = await ensureWorkspace({ root, database: name, log });
+      releases.push(ws.release);
+      runtimes.set(name, new DatabaseRuntime({ name, wsDir: ws.dir, config, log }));
+    }
+  } catch (err) {
+    await Promise.all(releases.map((release) => release()));
+    throw err;
   }
 
   const statics = await prepareStatic({
@@ -85,6 +95,7 @@ export async function createApp(options: CreateAppOptions): Promise<App> {
     port: config.port,
     development: process.env.NODE_ENV === "development",
     idleTimeout: 120,
+    maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
     routes,
     fetch: handler,
     error(err) {
@@ -117,6 +128,7 @@ export async function createApp(options: CreateAppOptions): Promise<App> {
         log.info("shutting down");
         await Promise.all([...runtimes.values()].map((r) => r.stop()));
         server.stop(true);
+        await Promise.all(releases.map((release) => release()));
       })();
       return stopping;
     },
@@ -139,6 +151,13 @@ export interface HandlerContext {
   runtimes: Map<string, RuntimeView>;
   defaultDatabase: string;
   statics: StaticAssets;
+}
+
+/** `413 bddb_payload_too_large` for a write body above `MAX_BODY_BYTES`. */
+function bodyTooLarge(): Response {
+  return problemResponse("bddb_payload_too_large", "request body exceeds 1 MiB", {
+    extra: { limit_bytes: MAX_BODY_BYTES },
+  });
 }
 
 function text(body: string, status = 200): Response {
@@ -219,10 +238,14 @@ export function createHandler(ctx: HandlerContext): (request: Request) => Promis
           param: filtered.param,
         });
       }
-      return forward(target, "GET", match.route.upstream, filtered.query, undefined);
+      return forward(target, "GET", match.route.upstream, filtered.query, undefined, {
+        signal: request.signal,
+      });
     }
+    const declared = Number(request.headers.get("content-length") ?? "0");
+    if (declared > MAX_BODY_BYTES) return bodyTooLarge();
     const raw = await request.text();
-    if (raw.length > MAX_BODY_BYTES) return invalidArgument("request body exceeds 1 MiB");
+    if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) return bodyTooLarge();
     let parsed: unknown;
     try {
       parsed = raw.trim() === "" ? {} : JSON.parse(raw);
@@ -237,6 +260,9 @@ export function createHandler(ctx: HandlerContext): (request: Request) => Promis
       match.route.upstream,
       undefined,
       JSON.stringify(body),
+      {
+        signal: request.signal,
+      },
     );
   }
 

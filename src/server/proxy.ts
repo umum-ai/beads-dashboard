@@ -212,27 +212,38 @@ export interface UpstreamTarget {
 /** Headers copied from the upstream response; everything else is dropped. */
 const PASS_HEADERS = ["content-type", "retry-after"];
 
-/** Forward one request and stream the upstream answer back unchanged. */
+export interface ForwardOptions {
+  timeoutMs?: number;
+  /** The browser's request signal: its abort cancels the upstream call. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Forward one request and stream the upstream answer back unchanged. The upstream call is
+ * bounded by `timeoutMs` and ends early when the browser goes away (`signal`).
+ */
 export async function forward(
   target: UpstreamTarget,
   method: string,
   upstreamPath: string,
   query: URLSearchParams | undefined,
   body: string | undefined,
-  timeoutMs = 60_000,
+  options: ForwardOptions = {},
 ): Promise<Response> {
   const qs = query && [...query.keys()].length > 0 ? `?${query.toString()}` : "";
   const url = `${target.baseUrl}${API_PREFIX}${upstreamPath}${qs}`;
   const headers: Record<string, string> = { accept: "application/json" };
   if (target.projectId) headers["bd-project-id"] = target.projectId;
   if (body !== undefined) headers["content-type"] = "application/json";
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 60_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   let upstream: Response;
   try {
     upstream = await fetch(url, {
       method,
       headers,
       ...(body === undefined ? {} : { body }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

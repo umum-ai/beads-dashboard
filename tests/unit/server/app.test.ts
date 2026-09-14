@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHandler, innerPath, type RuntimeView } from "../../../src/server/app.ts";
+import {
+  createHandler,
+  innerPath,
+  MAX_BODY_BYTES,
+  type RuntimeView,
+} from "../../../src/server/app.ts";
 import { Fanout } from "../../../src/server/fanout.ts";
 import { silentLogger } from "../../../src/server/log.ts";
 import type { StaticAssets } from "../../../src/server/static.ts";
@@ -241,6 +246,36 @@ describe("per-database", () => {
     expect(notJson.status).toBe(400);
     const notObject = await req("/api/p/kb/issues", { method: "POST", body: "[]" });
     expect(notObject.status).toBe(400);
+  });
+  test("write bodies above 1 MiB (in bytes, not characters) are refused with 413", async () => {
+    const tooLong = `{"title":"${"x".repeat(MAX_BODY_BYTES)}"}`;
+    const big = await req("/api/p/kb/issues", { method: "POST", body: tooLong });
+    expect(big.status).toBe(413);
+    expect(big.headers.get("content-type")).toContain("application/problem+json");
+    const problem = await big.json();
+    expect(problem.code).toBe("bddb_payload_too_large");
+    expect(problem.limit_bytes).toBe(MAX_BODY_BYTES);
+
+    // Fewer characters than the limit, but more bytes: still refused.
+    const multibyte = `{"title":"${"я".repeat(MAX_BODY_BYTES / 2)}"}`;
+    expect(multibyte.length).toBeLessThan(MAX_BODY_BYTES);
+    expect(Buffer.byteLength(multibyte)).toBeGreaterThan(MAX_BODY_BYTES);
+    const wide = await req("/api/p/kb/issues", { method: "POST", body: multibyte });
+    expect(wide.status).toBe(413);
+
+    // A declared Content-Length above the limit is refused before the body is read.
+    const declared = await req("/api/p/kb/issues", {
+      method: "POST",
+      headers: { "content-length": String(MAX_BODY_BYTES + 1) },
+      body: "{}",
+    });
+    expect(declared.status).toBe(413);
+
+    // Right at the limit passes through.
+    const fits = `{"title":"${"x".repeat(MAX_BODY_BYTES - 12)}"}`;
+    expect(Buffer.byteLength(fits)).toBe(MAX_BODY_BYTES);
+    const ok = await req("/api/p/kb/issues", { method: "POST", body: fits });
+    expect(ok.status).toBe(200);
   });
   test("forbidden operations are not routed", async () => {
     expect((await req("/api/p/kb/issues:delete", { method: "POST", body: "{}" })).status).toBe(404);

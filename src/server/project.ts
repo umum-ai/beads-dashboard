@@ -11,6 +11,13 @@
  * - journal records are applied incrementally and coalesced: after ~300 ms of quiet the ready
  *   set and stats are refreshed and rows touched by `dep_*`/`comment` events are re-read for
  *   their counts, all in one `delta`.
+ *
+ * Concurrency rules: one baseline at a time; records that arrive while a baseline is in flight
+ * are applied to the current state AND buffered, then replayed onto the baseline before it is
+ * diffed (a baseline read may predate a record — replaying keeps the newer state, and records
+ * carry the full issue so the replay is idempotent); one flush at a time, re-run once when new
+ * work queued up meanwhile, and its results are dropped and re-queued when a baseline replaced
+ * the state underneath it.
  */
 import { BdClient, type Context, type EventRecord, ProblemError } from "../api-client/index.ts";
 import type { Config } from "./config.ts";
@@ -44,6 +51,36 @@ export interface DatabaseRuntimeOptions {
   /** Overrides for tests. */
   dolt?: DoltConnection;
   pollIntervalMs?: number;
+  /** Build the upstream client (tests inject a `fetch`); default `new BdClient(...)`. */
+  createClient?: (options: ConstructorParameters<typeof BdClient>[0]) => BdClient;
+}
+
+/** Upper bound on parallel `GET issues/{id}` re-reads after a `dep_*`/`comment` burst. */
+export const REFETCH_CONCURRENCY = 8;
+
+/** `503 db_unavailable` — the only failure that feeds the supervisor's proxy watchdog. */
+export function isDbUnavailable(err: unknown): err is ProblemError {
+  return err instanceof ProblemError && err.status === 503 && err.code === "db_unavailable";
+}
+
+/** `Promise.allSettled` over `items`, at most `limit` calls of `fn` in flight; order preserved. */
+export async function settleWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      const item = items[index] as T;
+      results[index] = await settle(fn(item));
+    }
+  };
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, worker);
+  await Promise.all(workers);
+  return results;
 }
 
 /** Reasons that make the owner push a fresh `snapshot` frame instead of a `delta`. */
@@ -84,6 +121,11 @@ export class DatabaseRuntime {
   private liveDone: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private inflight: Promise<void> | null = null;
+  /** Records that arrived while `inflight` — replayed onto the baseline (H1). */
+  private buffered: { record: EventRecord; seq: number }[] | null = null;
+  private flushInflight: Promise<void> | null = null;
+  /** Highest journal seq applied; duplicates (`seq <= lastAppliedSeq`) are skipped. */
+  private lastAppliedSeq = -1;
   private stopped = false;
   private lastPublished = "";
   private readonly pending: Pending = { refetch: new Set(), readyDirty: false, timer: null };
@@ -109,7 +151,7 @@ export class DatabaseRuntime {
       bdPath: options.config.bdPath,
       dolt: options.dolt ?? doltConnection(options.config),
       log: options.log.child(`[bd:${options.name}]`),
-      onReady: (ready) => this.onBdReady(ready.baseUrl, ready.context),
+      onReady: (ready) => this.attach(ready.baseUrl, ready.context),
       onDown: (down) => this.onBdDown(down.reason, down.exitCode, down.lastLine),
     });
   }
@@ -167,13 +209,25 @@ export class DatabaseRuntime {
     return this.rebaseline(reason);
   }
 
+  /** Testing hook: the debounced ready/stats/counts refresh, now. */
+  flushNow(): Promise<void> {
+    if (this.pending.timer) clearTimeout(this.pending.timer);
+    this.pending.timer = null;
+    return this.flush();
+  }
+
   // ------------------------------------------------------------------ bd serve lifecycle
 
-  private onBdReady(baseUrl: string, context: Context): void {
+  /**
+   * `bd serve` answers at `baseUrl` (the supervisor's `onReady`; tests call it directly with a
+   * fake upstream): create the client, start the live stream and the poll timer.
+   */
+  attach(baseUrl: string, context: Context): void {
     if (this.stopped) return;
     const restarted = this.state !== null;
     this.baseUrl = baseUrl;
-    this.client = new BdClient({
+    const make = this.options.createClient ?? ((o) => new BdClient(o));
+    this.client = make({
       baseUrl,
       actor: this.options.config.actor,
       timeoutMs: 60_000,
@@ -214,6 +268,7 @@ export class DatabaseRuntime {
     if (!client) return;
     const ctrl = new AbortController();
     this.liveAbort = ctrl;
+    this.lastAppliedSeq = -1; // every stream starts with a head probe and a baseline
     this.liveDone = runLiveStream({
       client,
       log: this.log.child(`[live:${this.name}]`),
@@ -248,8 +303,10 @@ export class DatabaseRuntime {
     if (this.inflight) return this.inflight;
     const client = this.client;
     if (!client || this.stopped) return Promise.resolve();
+    this.buffered = [];
     this.inflight = this.doRebaseline(client, reason).finally(() => {
       this.inflight = null;
+      this.buffered = null;
     });
     return this.inflight;
   }
@@ -263,6 +320,7 @@ export class DatabaseRuntime {
       });
       if (this.stopped || this.client !== client) return;
       this.supervisor.noteDbOk();
+      const replayed = this.replayBuffered(next);
       const prev = this.state;
       const wasReady = this.info.state === "ready";
       this.state = next;
@@ -284,17 +342,19 @@ export class DatabaseRuntime {
         const body = computeDelta(prev, next);
         if (body) this.emitDelta(body);
       }
+      if (replayed > 0) this.scheduleFlush();
       this.log.debug("baseline loaded", {
         database: this.name,
         reason,
         issues: next.issues.size,
         ready: next.ready.size,
+        replayed: replayed || undefined,
         ms: Date.now() - started,
         pushed: fresh ? "snapshot" : "delta",
       });
     } catch (err) {
       if (this.stopped || this.client !== client) return;
-      if (err instanceof ProblemError && err.status === 503) {
+      if (isDbUnavailable(err)) {
         this.supervisor.noteDbUnavailable();
         if (this.state) {
           this.info.state = "degraded";
@@ -312,11 +372,35 @@ export class DatabaseRuntime {
     this.publishStatus();
   }
 
+  /**
+   * Apply the records buffered during the baseline onto its result, so a record newer than the
+   * baseline read wins (an issue created after the read is upserted, one deleted after it is
+   * removed). Their refetch/ready effects join `pending`; returns how many were replayed.
+   */
+  private replayBuffered(next: StateData): number {
+    const buffered = this.buffered ?? [];
+    this.buffered = [];
+    const since = this.closedSinceNow();
+    for (const { record } of buffered) {
+      const effect = applyEvent(next, record, since);
+      for (const id of effect.refetch) this.pending.refetch.add(id);
+      if (effect.readyDirty) this.pending.readyDirty = true;
+    }
+    return buffered.length;
+  }
+
   // ------------------------------------------------------------------ incremental
 
   private applyRecord(record: EventRecord, seq: number): void {
     const state = this.state;
     if (!state || this.stopped) return;
+    if (seq <= this.lastAppliedSeq) {
+      this.log.debug("duplicate event skipped", { database: this.name, seq, op: record.op });
+      return;
+    }
+    this.lastAppliedSeq = seq;
+    // A baseline read in flight may predate this record: keep it for a replay onto the result.
+    if (this.buffered) this.buffered.push({ record, seq });
     const effect = applyEvent(state, record, this.closedSinceNow());
     this.log.debug("event applied", {
       database: this.name,
@@ -333,15 +417,30 @@ export class DatabaseRuntime {
   }
 
   private scheduleFlush(): void {
-    if (this.pending.timer) return;
+    if (this.pending.timer || this.stopped) return;
     this.pending.timer = setTimeout(() => {
       this.pending.timer = null;
       void this.flush();
     }, this.options.flushDelayMs ?? 300);
   }
 
-  /** Ready set + stats + re-read of rows whose counts changed → one delta. */
-  private async flush(): Promise<void> {
+  /**
+   * Ready set + stats + re-read of rows whose counts changed → one delta. Serialised: a call
+   * while one is running returns the running one, and a finished flush re-arms itself when
+   * work queued up meanwhile (so an older ready set can never land after a newer one).
+   */
+  private flush(): Promise<void> {
+    if (this.flushInflight) return this.flushInflight;
+    // A baseline in flight will replace the state; let it finish, then refresh on top of it.
+    if (this.inflight) return this.inflight.then(() => this.scheduleFlush());
+    this.flushInflight = this.doFlush().finally(() => {
+      this.flushInflight = null;
+      if (this.pending.readyDirty || this.pending.refetch.size > 0) this.scheduleFlush();
+    });
+    return this.flushInflight;
+  }
+
+  private async doFlush(): Promise<void> {
     const client = this.client;
     const state = this.state;
     if (!client || !state || this.stopped) return;
@@ -350,6 +449,10 @@ export class DatabaseRuntime {
     this.pending.refetch.clear();
     this.pending.readyDirty = false;
     if (ids.length === 0 && !readyDirty) return;
+    const requeue = () => {
+      for (const id of ids) this.pending.refetch.add(id);
+      if (readyDirty) this.pending.readyDirty = true;
+    };
 
     const body: DeltaBody = { upserts: [], removes: [] };
     const upsert = (row: BoardIssue) => {
@@ -360,19 +463,23 @@ export class DatabaseRuntime {
     const [readyResult, statsResult, detailResults] = await Promise.all([
       settle(readyDirty ? client.ready({ limit: 0 }) : Promise.resolve(null)),
       settle(readyDirty ? client.stats() : Promise.resolve(null)),
-      Promise.allSettled(
-        ids.map((id) => client.getIssue(id, { include_dependents: true, brief_deps: true })),
+      settleWithLimit(ids, REFETCH_CONCURRENCY, (id) =>
+        client.getIssue(id, { include_dependents: true, brief_deps: true }),
       ),
     ]);
-    if (this.stopped || this.client !== client || this.state !== state) return;
+    if (this.stopped || this.client !== client) return;
+    if (this.state !== state) {
+      // A baseline replaced the state while we were reading: our reads may be older than it
+      // or newer — re-read on top of the new state rather than guess.
+      requeue();
+      return;
+    }
 
     let dbOk = false;
     let dbUnavailable = false;
     const note = (result: PromiseSettledResult<unknown>) => {
       if (result.status === "fulfilled") dbOk = true;
-      else if (result.reason instanceof ProblemError && result.reason.status === 503) {
-        dbUnavailable = true;
-      }
+      else if (isDbUnavailable(result.reason)) dbUnavailable = true;
     };
 
     note(readyResult);
@@ -419,8 +526,8 @@ export class DatabaseRuntime {
     if (body.upserts.length > 0 || body.removes.length > 0 || body.ready || body.stats) {
       this.emitDelta(body);
     }
-    this.info.lastSyncAt = new Date().toISOString();
-    if (this.pending.readyDirty) this.scheduleFlush();
+    // "last successful sync": only when at least one request answered.
+    if (dbOk) this.info.lastSyncAt = new Date().toISOString();
     this.publishStatus();
   }
 

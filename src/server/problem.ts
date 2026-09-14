@@ -9,7 +9,8 @@ export type BddbProblemCode =
   | "bddb_not_ready"
   | "bddb_upstream_unavailable"
   | "bddb_invalid_argument"
-  | "bddb_not_found";
+  | "bddb_not_found"
+  | "bddb_payload_too_large";
 
 const TITLES: Record<BddbProblemCode, string> = {
   bddb_database_unknown: "Unknown database",
@@ -17,6 +18,7 @@ const TITLES: Record<BddbProblemCode, string> = {
   bddb_upstream_unavailable: "bd serve unavailable",
   bddb_invalid_argument: "Invalid argument",
   bddb_not_found: "Not found",
+  bddb_payload_too_large: "Payload too large",
 };
 
 const STATUS: Record<BddbProblemCode, number> = {
@@ -25,6 +27,7 @@ const STATUS: Record<BddbProblemCode, number> = {
   bddb_upstream_unavailable: 502,
   bddb_invalid_argument: 400,
   bddb_not_found: 404,
+  bddb_payload_too_large: 413,
 };
 
 let counter = 0;

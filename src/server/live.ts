@@ -9,8 +9,9 @@
  *
  * - `event: truncated` / `410 events_journal_truncated` → `since` = the problem's `head`, full
  *   re-baseline.
- * - `409 events_journal_disabled` → the workspace has no journal: polling only, probe again every
- *   poll interval.
+ * - `409 events_journal_disabled` → the workspace has no journal: one re-baseline, then polling
+ *   only (the owner's poll timer keeps diffing) while the head is probed again every poll
+ *   interval; the probe alone does not re-baseline.
  * - A reconnect after a gap longer than `longGapMs` → full re-baseline (retention may have
  *   pruned, `bd dolt pull` is never journaled).
  * - No frame (not even a heartbeat) for `staleMs` → the connection is considered dead.
@@ -106,6 +107,8 @@ export async function runLiveStream(options: LiveStreamOptions): Promise<void> {
   let attempt = 0;
   let disconnectedAt: number | null = null;
   let everConnected = false;
+  // The journal-disabled branch re-baselines once per outage; later probes only look again.
+  let disabledBaselined = false;
 
   while (!signal.aborted) {
     // 1. Checkpoint unknown (first run, or after the journal came back): probe the head first,
@@ -114,10 +117,17 @@ export async function runLiveStream(options: LiveStreamOptions): Promise<void> {
       const probe = await probeHead(client, signal);
       if (signal.aborted) return;
       if (probe.kind === "disabled") {
-        log.info("events journal disabled on this bd serve; polling only", {
-          retry_in_ms: options.disabledRetryMs,
-        });
-        await options.onRebaseline("journal_disabled").catch(() => {});
+        if (!disabledBaselined) {
+          log.info("events journal disabled on this bd serve; polling only", {
+            retry_in_ms: options.disabledRetryMs,
+          });
+          await options.onRebaseline("journal_disabled").catch(() => {});
+          disabledBaselined = true;
+        } else {
+          log.debug("events journal still disabled; polling only", {
+            retry_in_ms: options.disabledRetryMs,
+          });
+        }
         options.onDisconnected("journal_disabled");
         await sleep(options.disabledRetryMs, signal);
         continue;
@@ -131,6 +141,7 @@ export async function runLiveStream(options: LiveStreamOptions): Promise<void> {
         continue;
       }
       since = probe.head;
+      disabledBaselined = false;
       await options.onRebaseline(everConnected ? "reconnect" : "start").catch(() => {});
       if (signal.aborted) return;
     }

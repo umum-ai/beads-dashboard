@@ -80,9 +80,10 @@ LABEL org.opencontainers.image.title="bddb" \
 USER 1000:1000
 WORKDIR /app
 EXPOSE 7331
-# Honours BDDB_PORT and BDDB_BASE_PATH; /healthz means "process alive", /readyz "a database is ready".
+# Honours BDDB_PORT and BDDB_BASE_PATH (normalised like config.ts: trailing slashes dropped, one
+# leading slash); /healthz means "process alive", /readyz "a database is ready".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.BDDB_PORT ?? 7331}${process.env.BDDB_BASE_PATH ?? ''}/healthz`).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+  CMD ["bun", "-e", "const b = (process.env.BDDB_BASE_PATH ?? '').trim().replace(/\\/+$/, ''); const p = b === '' ? '' : (b.startsWith('/') ? b : '/' + b); fetch(`http://127.0.0.1:${process.env.BDDB_PORT ?? 7331}${p}/healthz`).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 
 ENTRYPOINT ["bddb"]
 CMD ["serve"]

@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { filterQuery, matchProxyRoute, withAttribution } from "../../../src/server/proxy.ts";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  filterQuery,
+  forward,
+  matchProxyRoute,
+  withAttribution,
+} from "../../../src/server/proxy.ts";
 
 describe("matchProxyRoute", () => {
   test("read routes", () => {
@@ -90,5 +95,49 @@ describe("withAttribution", () => {
     expect(withAttribution([], "actor", "bddb")).toBeNull();
     expect(withAttribution("x", "actor", "bddb")).toBeNull();
     expect(withAttribution(null, "actor", "bddb")).toBeNull();
+  });
+});
+
+describe("forward", () => {
+  let upstream: ReturnType<typeof Bun.serve>;
+  let aborted = 0;
+  beforeAll(() => {
+    upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        return new Promise<Response>((resolve) => {
+          const timer = setTimeout(() => resolve(Response.json({ slow: true })), 2000);
+          req.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            aborted++;
+            resolve(new Response(null, { status: 499 }));
+          });
+        });
+      },
+    });
+  });
+  afterAll(() => upstream.stop(true));
+
+  test("the browser's abort cancels the upstream call (502 bddb_upstream_unavailable)", async () => {
+    const ctrl = new AbortController();
+    const target = { baseUrl: `http://127.0.0.1:${upstream.port}`, projectId: null };
+    const pending = forward(target, "GET", "/stats", undefined, undefined, {
+      signal: ctrl.signal,
+    });
+    setTimeout(() => ctrl.abort(), 20);
+    const started = Date.now();
+    const res = await pending;
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(res.status).toBe(502);
+    expect((await res.json()).code).toBe("bddb_upstream_unavailable");
+    await Bun.sleep(50);
+    expect(aborted).toBe(1);
+  });
+
+  test("the timeout still applies without a browser signal", async () => {
+    const target = { baseUrl: `http://127.0.0.1:${upstream.port}`, projectId: null };
+    const res = await forward(target, "GET", "/stats", undefined, undefined, { timeoutMs: 30 });
+    expect(res.status).toBe(502);
   });
 });

@@ -58,4 +58,9 @@ describe("routes", () => {
     );
     expect(parseRoute("/p/my%20db/board")).toEqual({ kind: "board", db: "my db" });
   });
+  test("a malformed percent-encoding does not throw (the segment is kept as typed)", () => {
+    expect(() => parseRoute("/p/%E0%A4%A/board")).not.toThrow();
+    expect(parseRoute("/p/%E0%A4%A/board")).toEqual({ kind: "board", db: "%E0%A4%A" });
+    expect(parseRoute("/p/db/issue/%zz")).toEqual({ kind: "issue", db: "db", issueId: "%zz" });
+  });
 });

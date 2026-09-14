@@ -4,11 +4,18 @@
  * (`events-journal: true`). No `bd init` is run and no `project_id` is written (a mismatch
  * makes bd refuse to connect); host/port/user/password reach `bd serve` through the
  * environment (see supervisor.ts). Verified recipe: tmp/research/facts-checked.md §d.
+ *
+ * Each workspace is locked (`bddb.lock` with the owner pid) so two bddb processes never share
+ * one — they would share `bd serve`'s `.beads/dolt/proxy.pid` and kill each other's db-proxy.
  */
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StartupError } from "./errors.ts";
 import type { Logger } from "./log.ts";
+
+/** Name of the per-workspace lock file (`<work-dir>/<database>/bddb.lock`, holds the owner pid). */
+export const LOCK_FILE = "bddb.lock";
 
 /** `$BDDB_WORK_DIR`, else `$TMPDIR/bddb`, else `os.tmpdir()/bddb`. */
 export function workspaceRoot(
@@ -54,13 +61,86 @@ export interface WorkspaceOptions {
   root: string;
   database: string;
   log: Logger;
+  /** Pid written into the lock file (default: this process). */
+  pid?: number;
+  /** Is `pid` alive? Default: `process.kill(pid, 0)`. */
+  isAlive?: (pid: number) => boolean;
 }
 
-/** Create or refresh the workspace for `database`; returns its directory. */
-export async function ensureWorkspace(options: WorkspaceOptions): Promise<string> {
+export interface Workspace {
+  dir: string;
+  /** Remove the lock file (shutdown). Idempotent. */
+  release(): Promise<void>;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: the process exists but belongs to another user.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Take the exclusive lock of `dir` (`bddb.lock` with the owner pid). A lock held by a live
+ * process is a hard failure (two bddb processes on one workspace would share `bd serve`'s
+ * `proxy.pid` and kill each other's db-proxy); a lock left by a dead process is taken over.
+ */
+export async function acquireLock(
+  dir: string,
+  options: { pid?: number; isAlive?: (pid: number) => boolean; log: Logger },
+): Promise<() => Promise<void>> {
+  const file = path.join(dir, LOCK_FILE);
+  const pid = options.pid ?? process.pid;
+  const alive = options.isAlive ?? processAlive;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const handle = await open(file, "wx", 0o600);
+      await handle.writeFile(`${pid}\n`);
+      await handle.close();
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const text = (await readFile(file, "utf8").catch(() => "")).trim();
+      const owner = Number(text);
+      if (Number.isInteger(owner) && owner > 0 && owner !== pid && alive(owner)) {
+        throw new StartupError(
+          `workspace ${dir} is in use by another bddb process (pid ${owner}, lock file ${file})`,
+          [
+            "two bddb instances must not share a workspace: they would share bd serve's proxy.pid and kill each other's db-proxy",
+            "give this instance its own BDDB_WORK_DIR (--work-dir), or stop the other process",
+            `if pid ${owner} is not bddb any more, remove the lock file and start again`,
+          ],
+        );
+      }
+      options.log.debug("taking over a stale workspace lock", { file, previous: text || null });
+      await rm(file, { force: true });
+    }
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    const text = (await readFile(file, "utf8").catch(() => "")).trim();
+    if (text === String(pid)) await rm(file, { force: true });
+  };
+}
+
+/**
+ * Create or refresh the workspace for `database` and lock it; returns its directory and the
+ * lock release. Throws `StartupError` when another live bddb process holds the workspace.
+ */
+export async function ensureWorkspace(options: WorkspaceOptions): Promise<Workspace> {
   const dir = path.join(options.root, options.database);
   const beads = path.join(dir, ".beads");
   await mkdir(beads, { recursive: true, mode: 0o700 });
+  const release = await acquireLock(dir, {
+    ...(options.pid !== undefined ? { pid: options.pid } : {}),
+    ...(options.isAlive ? { isAlive: options.isAlive } : {}),
+    log: options.log,
+  });
   if (!(await exists(path.join(dir, ".git")))) {
     const proc = Bun.spawn(["git", "init", "-q", "."], {
       cwd: dir,
@@ -82,7 +162,7 @@ export async function ensureWorkspace(options: WorkspaceOptions): Promise<string
   );
   await writeFile(path.join(beads, "config.yaml"), "events-journal: true\n");
   await clearStaleProxy(beads, options.log);
-  return dir;
+  return { dir, release };
 }
 
 /** `{ pid, port }` of the detached `bd db-proxy-child`, if the pid file exists and parses. */

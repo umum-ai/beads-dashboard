@@ -153,10 +153,10 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   if (bd && git && first) {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "bddb-doctor-"));
     try {
-      const wsDir = await ensureWorkspace({ root: tmp, database: first, log: silentLogger });
+      const ws = await ensureWorkspace({ root: tmp, database: first, log: silentLogger });
       const started = await spawnBdServeOnce({
         database: first,
-        wsDir,
+        wsDir: ws.dir,
         bdPath: config.bdPath,
         dolt,
         timeoutMs: 20_000,

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { BoardIssue, Snapshot } from "../../../src/web/lib/bff-types.ts";
-import { applyDelta, emptyBoardState, fromSnapshot } from "../../../src/web/lib/delta.ts";
+import {
+  applyDelta,
+  applyQueued,
+  emptyBoardState,
+  fromSnapshot,
+} from "../../../src/web/lib/delta.ts";
 
 function row(id: string, over: Partial<BoardIssue> = {}): BoardIssue {
   return {
@@ -102,5 +107,37 @@ describe("delta application", () => {
     const result = applyDelta(emptyBoardState(), { seq: 42, upserts: [row("a")], removes: [] });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.state.seq).toBe(42);
+  });
+
+  test("deltas queued during a refetch: those inside the snapshot are dropped, the rest chain", () => {
+    // The snapshot came back at seq 12; deltas 11 (already inside), 13 and 14 arrived meanwhile.
+    const fresh = fromSnapshot({ ...snapshot, seq: 12, issues: [row("a", { title: "a@12" })] });
+    const queued = [
+      { seq: 14, upserts: [row("a", { title: "a@14" })], removes: [] },
+      { seq: 11, upserts: [row("a", { title: "a@11" })], removes: [] },
+      { seq: 13, upserts: [row("c")], removes: [] },
+    ];
+    const { state, gap } = applyQueued(fresh, queued);
+    expect(gap).toBe(false);
+    expect(state.seq).toBe(14);
+    expect(state.issues.get("a")?.title).toBe("a@14");
+    expect(state.issues.has("c")).toBe(true);
+  });
+
+  test("a queued delta that cannot chain reports a gap and keeps what did apply", () => {
+    const fresh = fromSnapshot({ ...snapshot, seq: 12 });
+    const { state, gap } = applyQueued(fresh, [
+      { seq: 13, upserts: [row("c")], removes: [] },
+      { seq: 15, upserts: [row("d")], removes: [] },
+    ]);
+    expect(gap).toBe(true);
+    expect(state.seq).toBe(13);
+    expect(state.issues.has("c")).toBe(true);
+    expect(state.issues.has("d")).toBe(false);
+  });
+
+  test("nothing queued leaves the state untouched", () => {
+    const fresh = fromSnapshot(snapshot);
+    expect(applyQueued(fresh, [])).toEqual({ state: fresh, gap: false });
   });
 });

@@ -14,7 +14,11 @@ Conventions:
   `bddb_database_unknown` (404), `bddb_not_ready` (503, database still starting or its
   `bd serve` is down; honours `Retry-After`, currently `2`), `bddb_upstream_unavailable` (502,
   `bd serve` answered with a non-problem error or the connection failed),
-  `bddb_invalid_argument` (400), `bddb_not_found` (404, no such route under `/api`).
+  `bddb_invalid_argument` (400), `bddb_not_found` (404, no such route under `/api`),
+  `bddb_payload_too_large` (413, a write body above 1 MiB — `bd serve`'s own limit; carries
+  `limit_bytes`). The limit is measured in UTF-8 bytes and checked against `Content-Length`
+  before the body is read; a body far above it (limit + 64 KiB) is cut off by the server itself
+  with a bare `413`.
 - `<db>` is the database name as listed in `GET /api/meta`.
 - `revision` is an opaque string everywhere. `metadata` is arbitrary JSON.
 - All write requests carry `actor` (string) in the body. If missing, the server fills
@@ -99,6 +103,21 @@ issues are fetched on demand (see `issues` list proxy). `limit=0` is used (we ar
 
 Implementation notes (server side, verified on bd 1.3.0-rc.2):
 
+- Consistency of the server-side state: one baseline (full re-read) runs at a time. Journal
+  records that arrive while it is in flight are applied to the current state and buffered, then
+  replayed onto the baseline result before it is diffed — a baseline read may predate a record,
+  and replaying keeps the newer state (an issue created after the read is upserted, one deleted
+  after it is removed). The debounced ready/stats/counts refresh is serialised as well (one at
+  a time, re-run once when work queued up meanwhile, and re-queued when a baseline replaced the
+  state underneath it), so an older ready set never lands after a newer one. Per-row re-reads
+  after a `dep_*`/`comment` burst run at most 8 in parallel. Records with a `seq` at or below
+  the last applied one are skipped. `lastSyncAt` only advances when at least one request of the
+  sync succeeded. Only `503 db_unavailable` counts as "database unavailable" (state `degraded`,
+  proxy watchdog); a `503 busy` is retried like any other failure.
+- With the events journal disabled (`409 events_journal_disabled`), bddb re-baselines **once**
+  (pushed as a `snapshot`), then keeps diffing on the poll timer only; the journal is re-probed
+  every poll interval without another re-baseline until it comes back.
+- Done-category rows without a `closed_at` are outside the closed window (not in `issues`).
 - A full re-baseline is 7 loopback calls: `config/status.custom`, `config/types.custom`,
   `issues?limit=0&brief=true` (active + wip: the server default), `issues?status=<frozen
   names>&limit=0&brief=true`, the closed window, `ready?limit=0`, `stats`. The closed window is
@@ -134,8 +153,11 @@ type Delta = {
 };
 ```
 
-The client keeps the snapshot in memory and applies deltas. There is no `since` parameter:
-reconnecting always yields a fresh `snapshot` frame. Every browser tab opens exactly one
+The client keeps the snapshot in memory and applies deltas. Deltas that arrive while a
+`/snapshot` refetch is in flight are queued and replayed onto the fetched snapshot: those with
+`seq <= snapshot.seq` are already inside it and are dropped, the rest chain from it (a gap among
+them triggers one more refetch). There is no `since` parameter: reconnecting always yields a
+fresh `snapshot` frame. Every browser tab opens exactly one
 stream per database it displays. `id:` fields are not used. The stream starts with
 `retry: 3000` (the browser's reconnect delay after a network failure).
 

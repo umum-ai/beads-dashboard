@@ -144,6 +144,7 @@
   "error.bddb_not_ready": "База ещё не готова. Повтор…",
   "error.bddb_upstream_unavailable": "bd serve недоступен.",
   "error.bddb_invalid_argument": "Дашборд отправил некорректный запрос.",
+  "error.bddb_payload_too_large": "Тело запроса больше 1 МиБ.",
   "error.not_found": "Не найдено.",
   "error.db_unavailable": "База Dolt недоступна.",
   "error.network_error": "Нет связи с сервером дашборда.",

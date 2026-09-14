@@ -52,3 +52,22 @@ export function applyDelta(state: BoardState, delta: Delta): ApplyResult {
     },
   };
 }
+
+/**
+ * Replay deltas that arrived while `/snapshot` was being refetched onto the fresh state, in seq
+ * order: those at or below the snapshot's seq are already inside it, the rest chain from it.
+ * `gap` is set when a queued delta cannot chain (the stream is ahead) — the caller refetches.
+ */
+export function applyQueued(
+  state: BoardState,
+  queued: readonly Delta[],
+): { state: BoardState; gap: boolean } {
+  let current = state;
+  for (const delta of [...queued].sort((a, b) => a.seq - b.seq)) {
+    if (delta.seq <= current.seq) continue;
+    const result = applyDelta(current, delta);
+    if (result.ok) current = result.state;
+    else if (result.reason === "gap") return { state: current, gap: true };
+  }
+  return { state: current, gap: false };
+}

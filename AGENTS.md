@@ -63,17 +63,19 @@ set the connection explicitly (`BEADS_DOLT_SERVER_HOST/PORT/DATABASE/USER`, `BEA
 `BEADS_DOLT_AUTO_START=0`, `BD_EVENTS_JOURNAL=1`), run `bd serve` with `cwd` in the workspace, and
 stop the detached `bd db-proxy-child` (`.beads/dolt/proxy.pid`) together with `bd serve`
 (`src/server/workspace.ts`, `supervisor.ts`). Use a dedicated `BDDB_WORK_DIR` per running
-instance: two bddb processes sharing `<work-dir>/<db>` would also share the proxy pid file.
+instance: two bddb processes sharing `<work-dir>/<db>` would also share the proxy pid file —
+`ensureWorkspace` enforces it with `<work-dir>/<db>/bddb.lock` (owner pid; a live owner →
+`StartupError`, exit 2; a dead one is taken over; released on shutdown).
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals, startup error reporting: exit 2 with hints for config / discovery / preflight, 1 otherwise), `preflight.ts` (`bd` present and supported before anything starts), `app.ts` (routes, startup log lines), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime, `DatabaseInfo.lastError`), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `types.ts` (wire types of docs/bff-api.md) |
+| `src/server/` | BFF: `cli.ts` (`bddb serve` / `doctor` / `version`), `main.ts` (start + signals, startup error reporting: exit 2 with hints for config / discovery / preflight, 1 otherwise), `preflight.ts` (`bd` present and supported before anything starts), `app.ts` (routes, startup log lines), `config.ts`, `discovery.ts` (Bun.SQL), `workspace.ts` + `supervisor.ts` (`bd serve` per database), `snapshot.ts` (baseline, diff, event application), `live.ts` (one `events:watch` per database), `project.ts` (per-database runtime, `DatabaseInfo.lastError`), `fanout.ts` (browser SSE), `proxy.ts` (whitelisted read/write proxies), `static.ts` (SPA), `doctor.ts`, `errors.ts` (`StartupError`, import-cycle free), `types.ts` (wire types of docs/bff-api.md) |
 | `src/web/` | Preact SPA (`index.html`, `main.tsx`); layout in `docs/ui.md`. Keyboard: `lib/keyboard.ts` (pure) + `lib/board-keys.ts`; dialogs use `lib/focus-trap.ts`; states in `components/EmptyState.tsx`, `StatusBanners.tsx`; `lib/contrast.ts` backs the WCAG unit test |
 | `src/api-client/` | Types generated from the spec, HTTP client, Problem handling, capability gating |
 | `spec/openapi.v0.yaml` | Pinned copy of the `bd serve` OpenAPI spec for the supported beads version. Source of truth for the contract; never hand-edit |
-| `tests/unit/` | `bun test` unit tests, including `web/contrast.test.ts` (AA for every text/background pair of `tokens.css`, both themes), `web/keyboard.test.ts`, `server/config-docs.test.ts` (`BDDB_*` in config.ts ↔ docs/configuration.md ↔ README), `server/preflight.test.ts` |
+| `tests/unit/` | `bun test` unit tests, including `server/project.test.ts` (`DatabaseRuntime` against a fake `bd serve` `fetch`: baseline/record races, flush serialisation, re-read cap), `server/workspace.test.ts` (lock), `web/contrast.test.ts` (AA for every text/background pair of `tokens.css`, both themes), `web/keyboard.test.ts`, `server/config-docs.test.ts` (`BDDB_*` in config.ts ↔ docs/configuration.md ↔ README), `server/preflight.test.ts` |
 | `tests/contract/` | Tests against a real `bd serve` + `dolt sql-server`: `bd-serve.test.ts` (api-client), `bff.test.ts` (bddb as a child process), `bff-resilience.test.ts` (kill `bd serve` → `down` → `ready`; kill the db-proxy → `degraded`) |
 | `tests/e2e/` | Playwright: `board`, `epics`, `edit`, `a11y` (keyboard, focus traps, simulated server states via `page.route`, axe), `live` (real only); `helpers.ts` |
 | `Dockerfile`, `.dockerignore`, `docker/bddb` | Multi-stage image (bd download + checksum, bun build, `oven/bun:1.4-slim` runtime); `docker/bddb` is the entry-point wrapper |

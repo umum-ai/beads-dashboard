@@ -144,6 +144,7 @@
   "error.bddb_not_ready": "The database is not ready yet. Retrying…",
   "error.bddb_upstream_unavailable": "bd serve is unreachable.",
   "error.bddb_invalid_argument": "The dashboard sent an invalid request.",
+  "error.bddb_payload_too_large": "The request body is larger than 1 MiB.",
   "error.not_found": "Not found.",
   "error.db_unavailable": "The Dolt database is unavailable.",
   "error.network_error": "Cannot reach the dashboard server.",

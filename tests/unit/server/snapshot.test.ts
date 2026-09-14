@@ -95,6 +95,10 @@ describe("dictionaries", () => {
 
 describe("scope and blocked", () => {
   const statuses = buildStatuses(undefined);
+  test("a done row without closed_at is out of the closed window", () => {
+    expect(inScope(row("a", { status: "closed" }), statuses, SINCE)).toBe(false);
+    expect(inScope(row("b", { status: "open" }), statuses, SINCE)).toBe(true);
+  });
   test("closed issues stay while closed_at is within the window", () => {
     expect(
       inScope(row("a", { status: "closed", closed_at: "2026-09-10T00:00:00Z" }), statuses, SINCE),

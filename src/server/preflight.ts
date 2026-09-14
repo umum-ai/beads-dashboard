@@ -5,18 +5,11 @@
  * minor is a warning, not an error (the UI shows the mismatch banner as well).
  */
 import { checkVersion } from "../api-client/index.ts";
+import { StartupError } from "./errors.ts";
 import { bdVersion } from "./supervisor.ts";
 import { BUILT_FOR_BEADS } from "./version.ts";
 
-/** Startup failure with hints, printed by the CLI like `bddb doctor` prints them; exit 2. */
-export class StartupError extends Error {
-  readonly hints: string[];
-  constructor(message: string, hints: string[] = []) {
-    super(message);
-    this.name = "StartupError";
-    this.hints = hints;
-  }
-}
+export { StartupError };
 
 export interface BdCheck {
   version: string;

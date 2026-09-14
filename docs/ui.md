@@ -45,7 +45,9 @@ Asset URLs in `index.html` are relative so Bun's bundler output works under a pr
 - `board` (`lib/delta.ts` `BoardState`): `seq`, `issues: Map<id, BoardIssue>`, `ready: Set`,
   `statuses`, `types`, `stats`. `snapshot` frames replace it; `delta` frames apply only when
   `seq === board.seq + 1`. A larger `seq` is a gap and triggers `GET /snapshot`; a smaller or
-  equal one is ignored.
+  equal one is ignored. Deltas that arrive while that refetch is in flight are queued and
+  replayed onto the fetched snapshot (`applyQueued`: `seq <= snapshot.seq` dropped, the rest
+  chained; a gap among them refetches once more).
 - `extraClosed`: rows loaded by "Show all closed" (`GET issues?status=<done>&all=true&limit=0&brief=true`,
   paged by `next_cursor`). Merged into `allIssues` behind the snapshot rows.
 - `childStats`: derived `Map<parentId, {total, closed}>` from `parent` links, used for epic
